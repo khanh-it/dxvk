@@ -46,15 +46,6 @@ jobs:
       run: |
         echo "VERSION_NAME=${GITHUB_REF##*/}-${GITHUB_SHA##*/}" >> $GITHUB_ENV
 
-    - name: Build MSVC x86
-      shell: pwsh
-      run: |
-        & "${Env:COMSPEC}" /s /c "`"${Env:VSDEVCMD}`" -arch=x86 -host_arch=x64 -no_logo && set" `
-          | % { , ($_ -Split '=', 2) } `
-          | % { [System.Environment]::SetEnvironmentVariable($_[0], $_[1]) }
-        meson --buildtype release --backend vs2022 build-msvc-x86
-        msbuild -m build-msvc-x86/dxvk.sln
-
     - name: Build MSVC x64
       shell: pwsh
       run: |
@@ -67,9 +58,6 @@ jobs:
     - name: Prepare artifacts
       shell: pwsh
       run: |
-        mkdir artifacts\x32
-        ls -Path build-msvc-x86\src -Include *.dll,*.pdb -Recurse
-          | cp -Destination (Join-Path -Path (pwd) -ChildPath artifacts\x32)
         mkdir artifacts\x64
         ls -Path build-msvc-x64\src -Include *.dll,*.pdb -Recurse
           | cp -Destination (Join-Path -Path (pwd) -ChildPath artifacts\x64)
