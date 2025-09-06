@@ -57,6 +57,9 @@ namespace dxvk {
 
     /// Whether vertex shaders may emit ClipDistance builtins.
     bool enableClipDistance = false;
+
+    /// Whether vertex shaders may emit CullDistance builtins.
+    bool enableCullDistance = false;
   };
 
 }
