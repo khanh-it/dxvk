@@ -9,6 +9,128 @@
 
 namespace dxvk {
 
+
+  struct D3D9WindowData {
+    bool unicode;
+    bool filter;
+    WNDPROC proc;
+  };
+
+
+  static std::recursive_mutex g_windowProcMapMutex;
+  static std::unordered_map<HWND, D3D9WindowData> g_windowProcMap;
+
+
+  template <typename T, typename J, typename ... Args>
+  auto CallCharsetFunction(T unicode, J ascii, bool isUnicode, Args... args) {
+    return isUnicode
+      ? unicode(args...)
+      : ascii  (args...);
+  }
+
+
+  class D3D9WindowMessageFilter {
+
+  public:
+
+    D3D9WindowMessageFilter(HWND window, bool filter = true)
+      : m_window(window) {
+      std::lock_guard lock(g_windowProcMapMutex);
+      auto it = g_windowProcMap.find(m_window);
+      m_filter = std::exchange(it->second.filter, filter);
+    }
+
+    ~D3D9WindowMessageFilter() {
+      std::lock_guard lock(g_windowProcMapMutex);
+      auto it = g_windowProcMap.find(m_window);
+      it->second.filter = m_filter;
+    }
+
+    D3D9WindowMessageFilter             (const D3D9WindowMessageFilter&) = delete;
+    D3D9WindowMessageFilter& operator = (const D3D9WindowMessageFilter&) = delete;
+
+  private:
+
+    HWND m_window;
+    bool m_filter;
+
+  };
+
+
+  LRESULT CALLBACK D3D9WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+
+
+  void ResetWindowProc(HWND window) {
+    std::lock_guard lock(g_windowProcMapMutex);
+
+    auto it = g_windowProcMap.find(window);
+    if (it == g_windowProcMap.end())
+      return;
+
+    auto proc = reinterpret_cast<WNDPROC>(
+      CallCharsetFunction(
+      GetWindowLongPtrW, GetWindowLongPtrA, it->second.unicode,
+        window, GWLP_WNDPROC));
+
+
+    if (proc == D3D9WindowProc)
+      CallCharsetFunction(
+        SetWindowLongPtrW, SetWindowLongPtrA, it->second.unicode,
+          window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(it->second.proc));
+
+    g_windowProcMap.erase(window);
+  }
+
+
+  void HookWindowProc(HWND window) {
+    std::lock_guard lock(g_windowProcMapMutex);
+
+    ResetWindowProc(window);
+
+    D3D9WindowData windowData;
+    windowData.unicode = IsWindowUnicode(window);
+    windowData.filter  = false;
+    windowData.proc = reinterpret_cast<WNDPROC>(
+      CallCharsetFunction(
+      SetWindowLongPtrW, SetWindowLongPtrA, windowData.unicode,
+        window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(D3D9WindowProc)));
+
+    g_windowProcMap[window] = std::move(windowData);
+  }
+
+
+  LRESULT CALLBACK D3D9WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCALCSIZE && wparam == TRUE)
+      return 0;
+
+    D3D9WindowData windowData = {};
+
+    {
+      std::lock_guard lock(g_windowProcMapMutex);
+
+      auto it = g_windowProcMap.find(window);
+      if (it != g_windowProcMap.end())
+        windowData = it->second;
+    }
+
+    bool unicode = windowData.proc
+      ? windowData.unicode
+      : IsWindowUnicode(window);
+
+    if (!windowData.proc || windowData.filter)
+      return CallCharsetFunction(
+        DefWindowProcW, DefWindowProcA, unicode,
+          window, message, wparam, lparam);
+
+    if (message == WM_DESTROY)
+      ResetWindowProc(window);
+
+    return CallCharsetFunction(
+      CallWindowProcW, CallWindowProcA, unicode,
+        windowData.proc, window, message, wparam, lparam);
+  }
+
+
   static uint16_t MapGammaControlPoint(float x) {
     if (x < 0.0f) x = 0.0f;
     if (x > 1.0f) x = 1.0f;
@@ -32,8 +154,6 @@ namespace dxvk {
     , m_frameLatencyCap  (pDevice->GetOptions()->maxFrameLatency)
     , m_frameLatencySignal(new sync::Fence(m_frameId))
     , m_dialog            (pDevice->GetOptions()->enableDialogMode) {
-    UpdateMonitorInfo();
-
     this->NormalizePresentParameters(pPresentParams);
     m_presentParams = *pPresentParams;
     m_window = m_presentParams.hDeviceWindow;
@@ -57,6 +177,9 @@ namespace dxvk {
 
 
   D3D9SwapChainEx::~D3D9SwapChainEx() {
+    DestroyBackBuffers();
+
+    ResetWindowProc(m_window);
     RestoreDisplayMode(m_monitor);
 
     m_device->waitForSubmission(&m_presentStatus);
@@ -170,7 +293,7 @@ namespace dxvk {
       return D3DERR_INVALIDCALL;
 
     D3D9CommonTexture* dstTexInfo = dst->GetCommonTexture();
-    D3D9CommonTexture* srcTexInfo = m_backBuffers[m_presentParams.BackBufferCount]->GetCommonTexture();
+    D3D9CommonTexture* srcTexInfo = m_backBuffers.back()->GetCommonTexture();
 
     if (unlikely(dstTexInfo->Desc()->Pool != D3DPOOL_SYSTEMMEM))
       return D3DERR_INVALIDCALL;
@@ -342,7 +465,7 @@ namespace dxvk {
       return D3DERR_INVALIDCALL;
     }
 
-    *ppBackBuffer = m_backBuffers[iBackBuffer].ref();
+    *ppBackBuffer = ref(m_backBuffers[iBackBuffer].ptr());
     return D3D_OK;
   }
 
@@ -437,7 +560,7 @@ namespace dxvk {
       DEVMODEW devMode = DEVMODEW();
       devMode.dmSize = sizeof(devMode);
 
-      if (!::EnumDisplaySettingsW(m_monInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
+      if (!GetMonitorDisplayMode(GetDefaultMonitor(), ENUM_CURRENT_SETTINGS, &devMode)) {
         Logger::err("D3D9SwapChainEx::GetDisplayModeEx: Failed to enum display settings");
         return D3DERR_INVALIDCALL;
       }
@@ -488,7 +611,10 @@ namespace dxvk {
     else {
       if (changeFullscreen)
         this->EnterFullscreenMode(pPresentParams, pFullscreenDisplayMode);
-      else
+
+      D3D9WindowMessageFilter filter(m_window);
+
+      if (!changeFullscreen)
         ChangeDisplayMode(pPresentParams, pFullscreenDisplayMode);
 
       // Move the window so that it covers the entire output    
@@ -505,7 +631,6 @@ namespace dxvk {
     if (changeFullscreen)
       SetGammaRamp(0, &m_ramp);
 
-    UpdatePresentRegion(nullptr, nullptr);
     CreateBackBuffers(m_presentParams.BackBufferCount);
   }
 
@@ -887,14 +1012,24 @@ namespace dxvk {
   }
 
 
+  void D3D9SwapChainEx::DestroyBackBuffers() {
+    for (auto& backBuffer : m_backBuffers)
+      backBuffer->ClearContainer();
+
+    m_backBuffers.clear();
+  }
+
+
   void D3D9SwapChainEx::CreateBackBuffers(uint32_t NumBackBuffers) {
     // Explicitly destroy current swap image before
     // creating a new one to free up resources
     m_resolveImage     = nullptr;
     m_resolveImageView = nullptr;
 
-    m_backBuffers.clear();
-    m_backBuffers.resize(NumBackBuffers + 1);
+    DestroyBackBuffers();
+
+    int NumFrontBuffer = m_parent->GetOptions()->noExplicitFrontBuffer ? 0 : 1;
+    m_backBuffers.resize(NumBackBuffers + NumFrontBuffer);
 
     // Create new back buffer
     D3D9_COMMON_TEXTURE_DESC desc;
@@ -911,7 +1046,7 @@ namespace dxvk {
     desc.Discard            = FALSE;
 
     for (uint32_t i = 0; i < m_backBuffers.size(); i++)
-      m_backBuffers[i] = new D3D9Surface(m_parent, &desc);
+      m_backBuffers[i] = new D3D9Surface(m_parent, &desc, this);
 
     auto swapImage = m_backBuffers[0]->GetCommonTexture()->GetImage();
 
@@ -1227,11 +1362,13 @@ namespace dxvk {
     uint32_t n = 0;
 
     if (Vsync) {
+      if (m_parent->GetOptions()->tearFree == Tristate::False)
+        pDstModes[n++] = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
       pDstModes[n++] = VK_PRESENT_MODE_FIFO_KHR;
     } else {
-      pDstModes[n++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
+      if (m_parent->GetOptions()->tearFree != Tristate::True)
+        pDstModes[n++] = VK_PRESENT_MODE_IMMEDIATE_KHR;
       pDstModes[n++] = VK_PRESENT_MODE_MAILBOX_KHR;
-      pDstModes[n++] = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
     }
 
     return n;
@@ -1254,6 +1391,16 @@ namespace dxvk {
       Logger::err("D3D9: EnterFullscreenMode: Failed to change display mode");
       return D3DERR_INVALIDCALL;
     }
+
+    // Testing shows we shouldn't hook WM_NCCALCSIZE but we shouldn't change
+    // windows style either.
+    //
+    // Some games restore window styles after we have changed it, so hooking is
+    // also required. Doing it will allow us to create fullscreen windows
+    // regardless of their style and it also appears to work on Windows.
+    HookWindowProc(m_window);
+
+    D3D9WindowMessageFilter filter(m_window);
     
     // Change the window flags to remove the decoration etc.
     LONG style   = ::GetWindowLongW(m_window, GWL_STYLE);
@@ -1277,7 +1424,6 @@ namespace dxvk {
       SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
     
     m_monitor = GetDefaultMonitor();
-
     return D3D_OK;
   }
   
@@ -1290,6 +1436,8 @@ namespace dxvk {
       Logger::warn("D3D9: LeaveFullscreenMode: Failed to restore display mode");
     
     m_monitor = nullptr;
+
+    ResetWindowProc(m_window);
     
     // Only restore the window style if the application hasn't
     // changed them. This is in line with what native D3D9 does.
@@ -1318,7 +1466,9 @@ namespace dxvk {
     const D3DDISPLAYMODEEX*      pFullscreenDisplayMode) {
     D3DDISPLAYMODEEX mode;
 
-    if (pFullscreenDisplayMode == nullptr) {
+    if (pFullscreenDisplayMode) {
+      mode = *pFullscreenDisplayMode;
+    } else {
       mode.Width            = pPresentParams->BackBufferWidth;
       mode.Height           = pPresentParams->BackBufferHeight;
       mode.Format           = pPresentParams->BackBufferFormat;
@@ -1327,7 +1477,21 @@ namespace dxvk {
       mode.Size             = sizeof(D3DDISPLAYMODEEX);
     }
 
-    return SetMonitorDisplayMode(GetDefaultMonitor(), pFullscreenDisplayMode == nullptr ? &mode : pFullscreenDisplayMode);
+    DEVMODEW devMode = { };
+    devMode.dmSize       = sizeof(devMode);
+    devMode.dmFields     = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+    devMode.dmPelsWidth  = mode.Width;
+    devMode.dmPelsHeight = mode.Height;
+    devMode.dmBitsPerPel = GetMonitorFormatBpp(EnumerateFormat(mode.Format));
+    
+    if (mode.RefreshRate != 0)  {
+      devMode.dmFields |= DM_DISPLAYFREQUENCY;
+      devMode.dmDisplayFrequency = mode.RefreshRate;
+    }
+    
+    return SetMonitorDisplayMode(GetDefaultMonitor(), &devMode)
+      ? D3D_OK
+      : D3DERR_NOTAVAILABLE;
   }
   
   
@@ -1335,25 +1499,9 @@ namespace dxvk {
     if (hMonitor == nullptr)
       return D3DERR_INVALIDCALL;
     
-    DEVMODEW devMode = { };
-    devMode.dmSize = sizeof(devMode);
-
-    if (!::EnumDisplaySettingsW(m_monInfo.szDevice, ENUM_REGISTRY_SETTINGS, &devMode))
-      return D3DERR_INVALIDCALL;
-    
-    Logger::info(str::format("D3D9: Setting display mode: ",
-      devMode.dmPelsWidth, "x", devMode.dmPelsHeight, "@",
-      devMode.dmDisplayFrequency));
-    
-    D3DDISPLAYMODEEX mode;
-    mode.Width            = devMode.dmPelsWidth;
-    mode.Height           = devMode.dmPelsHeight;
-    mode.RefreshRate      = devMode.dmDisplayFrequency;
-    mode.Format           = D3DFMT_X8R8G8B8; // Fix me
-    mode.ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-    mode.Size             = sizeof(D3DDISPLAYMODEEX);
-
-    return SetMonitorDisplayMode(GetDefaultMonitor(), &mode);
+    return RestoreMonitorDisplayMode(hMonitor)
+      ? D3D_OK
+      : D3DERR_NOTAVAILABLE;
   }
 
   bool    D3D9SwapChainEx::UpdatePresentRegion(const RECT* pSourceRect, const RECT* pDestRect) {
@@ -1395,13 +1543,6 @@ namespace dxvk {
     return VkExtent2D {
       std::max<uint32_t>(m_dstRect.right  - m_dstRect.left, 1u),
       std::max<uint32_t>(m_dstRect.bottom - m_dstRect.top,  1u) };
-  }
-
-  void    D3D9SwapChainEx::UpdateMonitorInfo() {
-    m_monInfo.cbSize = sizeof(m_monInfo);
-
-    if (!::GetMonitorInfoW(GetDefaultMonitor(), reinterpret_cast<MONITORINFO*>(&m_monInfo)))
-      throw DxvkError("D3D9SwapChainEx::GetDisplayModeEx: Failed to query monitor info");
   }
 
 

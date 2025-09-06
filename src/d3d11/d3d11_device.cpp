@@ -1907,11 +1907,19 @@ namespace dxvk {
 
     enabled.extMemoryPriority.memoryPriority                      = supported.extMemoryPriority.memoryPriority;
 
+    enabled.extRobustness2.robustBufferAccess2                    = supported.extRobustness2.robustBufferAccess2;
+    enabled.extRobustness2.robustImageAccess2                     = supported.extRobustness2.robustImageAccess2;
+
     enabled.extShaderDemoteToHelperInvocation.shaderDemoteToHelperInvocation  = supported.extShaderDemoteToHelperInvocation.shaderDemoteToHelperInvocation;
 
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor      = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor;
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor  = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor;
     
+    if (supported.extCustomBorderColor.customBorderColorWithoutFormat) {
+      enabled.extCustomBorderColor.customBorderColors             = VK_TRUE;
+      enabled.extCustomBorderColor.customBorderColorWithoutFormat = VK_TRUE;
+    }
+
     if (featureLevel >= D3D_FEATURE_LEVEL_9_1) {
       enabled.core.features.depthClamp                            = supported.core.features.depthClamp;
       enabled.core.features.depthBiasClamp                        = supported.core.features.depthBiasClamp;

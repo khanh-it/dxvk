@@ -624,6 +624,9 @@ namespace dxvk {
     const bool pixel  = m_programInfo.type() == DxsoProgramTypes::PixelShader;
     const bool vertex = !pixel;
 
+    if (pixel && input && semantic.usage == DxsoUsage::Color && m_programInfo.majorVersion() < 3)
+      centroid = true;
+
     uint32_t slot = 0;
 
     uint32_t& slots = input
@@ -1165,7 +1168,7 @@ namespace dxvk {
           this->emitDclInterface(
             false, reg.id.num,
             DxsoSemantic{ DxsoUsage::Color, reg.id.num },
-            IdentityWriteMask, false); // TODO: Do we want to make this centroid?
+            IdentityWriteMask, false);
 
           m_module.opStore(ptr.id, m_module.constfReplicant(0, ptr.type.ccount));
         }
@@ -1774,10 +1777,21 @@ namespace dxvk {
           emitRegisterLoad(src[1], mask).id);
         break;
       case DxsoOpcode::Mad:
-        result.id = m_module.opFFma(typeId,
-          emitRegisterLoad(src[0], mask).id,
-          emitRegisterLoad(src[1], mask).id,
-          emitRegisterLoad(src[2], mask).id);
+        if (!m_moduleInfo.options.longMad) {
+          result.id = m_module.opFFma(typeId,
+            emitRegisterLoad(src[0], mask).id,
+            emitRegisterLoad(src[1], mask).id,
+            emitRegisterLoad(src[2], mask).id);
+        }
+        else {
+          result.id = m_module.opFMul(typeId,
+            emitRegisterLoad(src[0], mask).id,
+            emitRegisterLoad(src[1], mask).id);
+
+          result.id = m_module.opFAdd(typeId,
+            result.id,
+            emitRegisterLoad(src[2], mask).id);
+        }
         break;
       case DxsoOpcode::Mul:
         result.id = m_module.opFMul(typeId,

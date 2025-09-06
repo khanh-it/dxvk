@@ -90,8 +90,10 @@ namespace dxvk {
           D3D9Format AdapterFormat,
           D3D9Format BackBufferFormat,
           BOOL       bWindowed) {
-    if (!IsSupportedBackBufferFormat(
-      AdapterFormat, BackBufferFormat, bWindowed))
+    if (!IsSupportedAdapterFormat(AdapterFormat, bWindowed) && !bWindowed)
+      return D3DERR_NOTAVAILABLE;
+
+    if (!IsSupportedBackBufferFormat(BackBufferFormat, bWindowed))
       return D3DERR_NOTAVAILABLE;
 
     return D3D_OK;
@@ -212,9 +214,6 @@ namespace dxvk {
           D3D9Format AdapterFormat,
           D3D9Format RenderTargetFormat,
           D3D9Format DepthStencilFormat) {
-    if (!IsSupportedAdapterFormat(AdapterFormat, false))
-      return D3DERR_NOTAVAILABLE;
-
     if (!IsDepthFormat(DepthStencilFormat))
       return D3DERR_NOTAVAILABLE;
 
@@ -674,16 +673,10 @@ namespace dxvk {
     if (pRotation != nullptr)
       *pRotation = D3DDISPLAYROTATION_IDENTITY;
 
-    MONITORINFOEXW monInfo = { };
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(GetDefaultMonitor(), reinterpret_cast<MONITORINFO*>(&monInfo)))
-      throw DxvkError("D3D9Adapter::GetAdapterDisplayModeEx: Failed to query monitor info");
-
     DEVMODEW devMode = DEVMODEW();
     devMode.dmSize = sizeof(devMode);
 
-    if (!::EnumDisplaySettingsW(monInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
+    if (!GetMonitorDisplayMode(GetDefaultMonitor(), ENUM_CURRENT_SETTINGS, &devMode)) {
       Logger::err("D3D9Adapter::GetAdapterDisplayModeEx: Failed to enum display settings");
       return D3DERR_INVALIDCALL;
     }
@@ -694,7 +687,6 @@ namespace dxvk {
     pMode->RefreshRate      = devMode.dmDisplayFrequency;
     pMode->Format           = D3DFMT_X8R8G8B8;
     pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-
     return D3D_OK;
   }
 
@@ -758,14 +750,6 @@ namespace dxvk {
     if (!m_modes.empty() && m_modeCacheFormat == Format)
       return; // We already cached the modes for this format. No need to do it again.
 
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(GetDefaultMonitor(), reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("D3D9Adapter::CacheModes: failed to query monitor info");
-      return;
-    }
-
     m_modes.clear();
     m_modeCacheFormat = Format;
 
@@ -784,7 +768,7 @@ namespace dxvk {
 
     const auto forcedRatio = Ratio<DWORD>(options.forceAspectRatio);
 
-    while (::EnumDisplaySettingsW(monInfo.szDevice, modeIndex++, &devMode)) {
+    while (GetMonitorDisplayMode(GetDefaultMonitor(), modeIndex++, &devMode)) {
       // Skip interlaced modes altogether
       if (devMode.dmDisplayFlags & DM_INTERLACED)
         continue;
