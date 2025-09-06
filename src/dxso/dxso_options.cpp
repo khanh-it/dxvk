@@ -51,6 +51,7 @@ namespace dxvk {
     alphaTestWiggleRoom = options.alphaTestWiggleRoom;
 
     enableClipDistance  = devFeatures.core.features.shaderClipDistance;
+    enableCullDistance  = devFeatures.core.features.shaderCullDistance;
   }
 
 }
