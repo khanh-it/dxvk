@@ -1,6 +1,6 @@
 name: Test Builds on Windows
 
-on: [pull_request, workflow_dispatch]
+on: [workflow_dispatch]
 
 jobs:
   build-set-windows:
