@@ -11,7 +11,7 @@ namespace dxvk {
   
   DxvkInstance::DxvkInstance() {
     Logger::info(str::format("Game: ", env::getExeName()));
-    Logger::info(str::format("DXVK: ", DXVK_VERSION));
+    Logger::info(str::format("DXVKx04: ", DXVK_VERSION));
 
     m_config = Config::getUserConfig();
     m_config.merge(Config::getAppConfig(env::getExePath()));
