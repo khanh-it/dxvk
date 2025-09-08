@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm> // Required for std::clamp
+
 #include "d3d9_include.h"
 
 #include "d3d9_util.h"
