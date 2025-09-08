@@ -9,6 +9,7 @@
 #include <list>
 #include <mutex>
 #include <new>
+#include <type_traits>
 
 namespace dxvk {
 
@@ -17,7 +18,7 @@ namespace dxvk {
 
   public:
 
-    struct alignas(16) SubresourceData { uint8_t data[sizeof(SubresourceType)]; };
+    using SubresourceData = std::aligned_storage_t<sizeof(SubresourceType), alignof(SubresourceType)>;
 
     D3D9BaseTexture(
             D3D9DeviceEx*             pDevice,
@@ -25,8 +26,7 @@ namespace dxvk {
             D3DRESOURCETYPE           ResourceType)
       : D3D9Resource<Base...> ( pDevice )
       , m_texture             ( pDevice, pDesc, ResourceType )
-      , m_lod                 ( 0 )
-      , m_autogenFilter       ( D3DTEXF_LINEAR ) {
+      , m_lod                 ( 0 ) {
       const uint32_t arraySlices = m_texture.Desc()->ArraySize;
       const uint32_t mipLevels   = m_texture.Desc()->MipLevels;
 
@@ -70,21 +70,36 @@ namespace dxvk {
     }
 
     DWORD STDMETHODCALLTYPE GetLevelCount() final {
-      return m_texture.Desc()->MipLevels;
+      return m_texture.ExposedMipLevels();
     }
 
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) final {
-      m_autogenFilter = FilterType;
+      if (unlikely(FilterType == D3DTEXF_NONE))
+        return D3DERR_INVALIDCALL;
+
+      auto lock = this->m_parent->LockDevice();
+
+      m_texture.SetMipFilter(FilterType);
+      this->m_parent->MarkTextureMipsDirty(&m_texture);
       return D3D_OK;
     }
 
     D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() final {
-      return m_autogenFilter;
+      return m_texture.GetMipFilter();
     }
 
     void STDMETHODCALLTYPE GenerateMipSubLevels() final {
-      if (m_texture.IsAutomaticMip())
-        this->m_parent->GenerateMips(&m_texture);
+      if (!m_texture.NeedsMipGen())
+        return;
+
+      auto lock = this->m_parent->LockDevice();
+
+      this->m_parent->MarkTextureMipsUnDirty(&m_texture);
+      this->m_parent->EmitGenerateMips(&m_texture);
+    }
+
+    void STDMETHODCALLTYPE PreLoad() final {
+      m_texture.PreLoadAll();
     }
 
     D3D9CommonTexture* GetCommonTexture() {
@@ -92,9 +107,6 @@ namespace dxvk {
     }
 
     SubresourceType* GetSubresource(UINT Subresource) {
-      if (unlikely(Subresource >= m_subresources.size()))
-        return nullptr;
-
       return reinterpret_cast<SubresourceType*>(&m_subresources[Subresource]);
     }
 
@@ -103,7 +115,6 @@ namespace dxvk {
     D3D9CommonTexture m_texture;
 
     DWORD m_lod;
-    D3DTEXTUREFILTERTYPE m_autogenFilter;
 
     std::vector<SubresourceData> m_subresources;
 
@@ -188,15 +199,13 @@ namespace dxvk {
     if (ptr == nullptr)
       return nullptr;
 
-    switch (ptr->GetType()) {
-      case D3DRTYPE_TEXTURE:       return static_cast<D3D9Texture2D*>  (ptr)->GetCommonTexture();
-      case D3DRTYPE_CUBETEXTURE:   return static_cast<D3D9TextureCube*>(ptr)->GetCommonTexture();
-      case D3DRTYPE_VOLUMETEXTURE: return static_cast<D3D9Texture3D*>  (ptr)->GetCommonTexture();
-      default:
-        Logger::warn("Unknown texture resource type."); break;
-    }
-
-    return nullptr;
+    D3DRESOURCETYPE type = ptr->GetType();
+    if (type == D3DRTYPE_TEXTURE)
+      return static_cast<D3D9Texture2D*>  (ptr)->GetCommonTexture();
+    else if (type == D3DRTYPE_CUBETEXTURE)
+      return static_cast<D3D9TextureCube*>(ptr)->GetCommonTexture();
+    else //if(type == D3DRTYPE_VOLUMETEXTURE)
+      return static_cast<D3D9Texture3D*>  (ptr)->GetCommonTexture();
   }
 
   inline D3D9CommonTexture* GetCommonTexture(D3D9Surface* ptr) {
@@ -214,13 +223,13 @@ namespace dxvk {
     if (tex == nullptr)
       return;
 
-    switch (tex->GetType()) {
-      case D3DRTYPE_TEXTURE:       CastRefPrivate<D3D9Texture2D>  (tex, AddRef); break;
-      case D3DRTYPE_CUBETEXTURE:   CastRefPrivate<D3D9TextureCube>(tex, AddRef); break;
-      case D3DRTYPE_VOLUMETEXTURE: CastRefPrivate<D3D9Texture3D>  (tex, AddRef); break;
-    default:
-      Logger::warn("Unknown texture resource type."); break;
-    }
+    D3DRESOURCETYPE type = tex->GetType();
+    if (type == D3DRTYPE_TEXTURE)
+      return CastRefPrivate<D3D9Texture2D>  (tex, AddRef);
+    else if (type == D3DRTYPE_CUBETEXTURE)
+      return CastRefPrivate<D3D9TextureCube>(tex, AddRef);
+    else //if(type == D3DRTYPE_VOLUMETEXTURE)
+      return CastRefPrivate<D3D9Texture3D>  (tex, AddRef);
   }
 
   inline void TextureChangePrivate(IDirect3DBaseTexture9*& dst, IDirect3DBaseTexture9* src) {

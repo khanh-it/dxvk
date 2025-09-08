@@ -22,9 +22,8 @@ namespace dxvk {
    */
   enum class DxvkContextFlag : uint32_t  {
     GpRenderPassBound,          ///< Render pass is currently bound
-    GpCondActive,               ///< Conditional rendering is enabled
+    GpRenderPassSuspended,      ///< Render pass is currently suspended
     GpXfbActive,                ///< Transform feedback is enabled
-    GpClearRenderTargets,       ///< Render targets need to be cleared
     GpDirtyFramebuffer,         ///< Framebuffer binding is out of date
     GpDirtyPipeline,            ///< Graphics pipeline binding is out of date
     GpDirtyPipelineState,       ///< Graphics pipeline needs to be recompiled
@@ -39,7 +38,6 @@ namespace dxvk {
     GpDirtyDepthBounds,         ///< Depth bounds have changed
     GpDirtyStencilRef,          ///< Stencil reference has changed
     GpDirtyViewport,            ///< Viewport state has changed
-    GpDirtyPredicate,           ///< Predicate has changed
     GpDynamicBlendConstants,    ///< Blend constants are dynamic
     GpDynamicDepthBias,         ///< Depth bias is dynamic
     GpDynamicDepthBounds,       ///< Depth bounds are dynamic
@@ -56,6 +54,17 @@ namespace dxvk {
   
   using DxvkContextFlags = Flags<DxvkContextFlag>;
 
+
+  /**
+   * \brief Context feature bits
+   */
+  enum class DxvkContextFeature {
+    NullDescriptors,
+    ExtendedDynamicState,
+  };
+
+  using DxvkContextFeatures = Flags<DxvkContextFeature>;
+  
 
   /**
    * \brief Barrier control flags
@@ -134,9 +143,11 @@ namespace dxvk {
   };
 
 
-  struct DxvkCondRenderState {
-    DxvkBufferSlice                 predicate;
-    VkConditionalRenderingFlagsEXT  flags;
+  struct DxvkDeferredClear {
+    Rc<DxvkImageView> imageView;
+    VkImageAspectFlags discardAspects;
+    VkImageAspectFlags clearAspects;
+    VkClearValue clearValue;
   };
   
   
@@ -154,7 +165,6 @@ namespace dxvk {
     DxvkPushConstantState     pc;
     DxvkXfbState              xfb;
     DxvkDynamicState          dyn;
-    DxvkCondRenderState       cond;
     
     DxvkGraphicsPipelineState gp;
     DxvkComputePipelineState  cp;

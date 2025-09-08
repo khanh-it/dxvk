@@ -64,6 +64,9 @@ namespace dxvk {
     /// Declare vertex positions in shaders as invariant
     bool invariantPosition;
 
+    /// Enable float control bits
+    bool floatControls;
+
     /// Back buffer count for the Vulkan swap chain.
     /// Overrides DXGI_SWAP_CHAIN_DESC::BufferCount.
     int32_t numBackBuffers;
@@ -71,6 +74,10 @@ namespace dxvk {
     /// Sync interval. Overrides the value
     /// passed to IDXGISwapChain::Present.
     int32_t syncInterval;
+
+    /// Tear-free mode if vsync is disabled
+    /// Tearing mode if vsync is enabled
+    Tristate tearFree;
 
     /// Override maximum frame latency if the app specifies
     /// a higher value. May help with frame timing issues.

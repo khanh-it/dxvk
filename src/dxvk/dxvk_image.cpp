@@ -84,16 +84,18 @@ namespace dxvk {
     m_vkd->vkGetImageMemoryRequirements2(
       m_vkd->device(), &memReqInfo, &memReq);
  
-    if (info.tiling != VK_IMAGE_TILING_LINEAR) {
+    if (info.tiling != VK_IMAGE_TILING_LINEAR && !dedicatedRequirements.prefersDedicatedAllocation) {
       memReq.memoryRequirements.size      = align(memReq.memoryRequirements.size,       memAlloc.bufferImageGranularity());
       memReq.memoryRequirements.alignment = align(memReq.memoryRequirements.alignment , memAlloc.bufferImageGranularity());
     }
 
     // Use high memory priority for GPU-writable resources
-    bool isGpuWritable = (m_info.usage & (
-      VK_IMAGE_USAGE_STORAGE_BIT          |
-      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0;
+    bool isGpuWritable = (m_info.access & (
+      VK_ACCESS_SHADER_WRITE_BIT                  |
+      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT         |
+      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT        |
+      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)) != 0;
     
     float priority = isGpuWritable ? 1.0f : 0.5f;
 

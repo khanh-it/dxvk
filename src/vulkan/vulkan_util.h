@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vulkan_loader_fn.h"
+#include "vulkan_loader.h"
 
 namespace dxvk::vk {
 
@@ -56,6 +56,15 @@ namespace dxvk::vk {
     subres.mipLevel   = range.baseMipLevel   + level;
     subres.arrayLayer = range.baseArrayLayer + layer;
     return subres;
+  }
+
+  inline bool checkSubresourceRangeOverlap(
+    const VkImageSubresourceRange&  a,
+    const VkImageSubresourceRange&  b) {
+    return a.baseMipLevel < b.baseMipLevel + b.levelCount
+        && a.baseMipLevel + a.levelCount > b.baseMipLevel
+        && a.baseArrayLayer < b.baseArrayLayer + b.layerCount
+        && a.baseArrayLayer + a.layerCount > b.baseArrayLayer;
   }
 
 }

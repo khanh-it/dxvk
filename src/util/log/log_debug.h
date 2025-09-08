@@ -4,13 +4,17 @@
 
 #include "log.h"
 
+#ifdef _MSC_VER
+#define METHOD_NAME __FUNCSIG__
+#else
 #define METHOD_NAME __PRETTY_FUNCTION__
+#endif
 
 #define TRACE_ENABLED
 
 #ifdef TRACE_ENABLED
 #define TRACE(...) \
-  do { dxvk::debug::trace(METHOD_NAME, __VA_ARGS__); } while (0)
+  do { dxvk::debug::trace(METHOD_NAME, ##__VA_ARGS__); } while (0)
 #else
 #define TRACE(...) \
   do { } while (0)

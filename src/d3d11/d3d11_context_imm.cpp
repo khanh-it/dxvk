@@ -35,22 +35,6 @@ namespace dxvk {
   }
   
   
-  ULONG STDMETHODCALLTYPE D3D11ImmediateContext::AddRef() {
-    ULONG refCount = m_refCount++;
-    if (!refCount)
-      m_parent->AddRef();
-    return refCount + 1;
-  }
-  
-  
-  ULONG STDMETHODCALLTYPE D3D11ImmediateContext::Release() {
-    ULONG refCount = --m_refCount;
-    if (!refCount)
-      m_parent->Release();
-    return refCount;
-  }
-  
-  
   D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE D3D11ImmediateContext::GetType() {
     return D3D11_DEVICE_CONTEXT_IMMEDIATE;
   }
@@ -156,7 +140,7 @@ namespace dxvk {
     m_parent->FlushInitContext();
 
     if (hEvent)
-      Logger::warn("D3D11: Flush1: Ignoring event");
+      SignalEvent(hEvent);
     
     D3D10DeviceLock lock = LockContext();
     
@@ -616,8 +600,7 @@ namespace dxvk {
         Flush();
         SynchronizeCsThread();
         
-        while (Resource->isInUse(access))
-          dxvk::this_thread::yield();
+        Resource->waitIdle(access);
       }
     }
     
@@ -646,6 +629,23 @@ namespace dxvk {
       if (now - m_lastFlush >= std::chrono::microseconds(delay))
         Flush();
     }
+  }
+
+
+  void D3D11ImmediateContext::SignalEvent(HANDLE hEvent) {
+    uint64_t value = ++m_eventCount;
+
+    if (m_eventSignal == nullptr)
+      m_eventSignal = new sync::Win32Fence();
+
+    m_eventSignal->setEvent(hEvent, value);
+
+    EmitCs([
+      cSignal = m_eventSignal,
+      cValue  = value
+    ] (DxvkContext* ctx) {
+      ctx->signal(cSignal, cValue);
+    });
   }
   
 }

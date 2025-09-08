@@ -706,7 +706,7 @@ namespace dxvk {
             D3D9CommonTexture*      pResource,
             UINT                    Subresource);
 
-    void GenerateMips(
+    void EmitGenerateMips(
             D3D9CommonTexture* pResource);
 
     HRESULT LockBuffer(
@@ -740,13 +740,25 @@ namespace dxvk {
 
     void UpdateActiveRTs(uint32_t index);
 
-    void UpdateActiveTextures(uint32_t index);
+    void UpdateActiveTextures(uint32_t index, DWORD combinedUsage);
 
-    void UpdateActiveHazards();
+    void UpdateActiveHazardsRT(uint32_t rtMask);
+
+    void UpdateActiveHazardsDS(uint32_t texMask);
 
     void MarkRenderHazards();
 
+    void UploadManagedTexture(D3D9CommonTexture* pResource);
+
     void UploadManagedTextures(uint32_t mask);
+
+    void GenerateTextureMips(uint32_t mask);
+
+    void MarkTextureMipsDirty(D3D9CommonTexture* pResource);
+
+    void MarkTextureMipsUnDirty(D3D9CommonTexture* pResource);
+
+    void MarkTextureUploaded(D3D9CommonTexture* pResource);
 
     template <bool Points>
     void UpdatePointMode();
@@ -1028,10 +1040,19 @@ namespace dxvk {
 
     uint32_t                        m_activeRTs        = 0;
     uint32_t                        m_activeRTTextures = 0;
-    uint32_t                        m_activeHazards    = 0;
+    uint32_t                        m_activeDSTextures = 0;
+    uint32_t                        m_activeHazardsRT  = 0;
     uint32_t                        m_alphaSwizzleRTs  = 0;
     uint32_t                        m_activeTextures   = 0;
     uint32_t                        m_activeTexturesToUpload = 0;
+    uint32_t                        m_activeTexturesToGen    = 0;
+
+    uint32_t                        m_fetch4Enabled = 0;
+    uint32_t                        m_fetch4        = 0;
+    uint32_t                        m_lastFetch4    = 0;
+
+    uint32_t                        m_activeHazardsDS = 0;
+    uint32_t                        m_lastHazardsDS   = 0;
 
     D3D9ShaderMasks                 m_vsShaderMasks = D3D9ShaderMasks();
     D3D9ShaderMasks                 m_psShaderMasks = FixedFunctionMask;
@@ -1182,6 +1203,8 @@ namespace dxvk {
     void UpdateSamplerSpecConsant(uint32_t value);
 
     void UpdateProjectionSpecConstant(uint32_t value);
+
+    void UpdateFetch4SpecConstant(uint32_t value);
 
   };
 

@@ -25,9 +25,10 @@
 #include "../util/util_flags.h"
 #include "../util/util_likely.h"
 #include "../util/util_math.h"
+#include "../util/util_monitor.h"
 #include "../util/util_string.h"
 
-#include <dxgi1_5.h>
+#include <dxgi1_6.h>
 
 // For some reason, these are not exposed
 #ifndef DXGI_RESOURCE_PRIORITY_NORMAL

@@ -195,6 +195,7 @@ namespace dxvk {
 
     case DxsoOpcode::End:
     case DxsoOpcode::Comment:
+    case DxsoOpcode::Phase:
       break;
 
     default:
@@ -468,6 +469,10 @@ namespace dxvk {
       }
     }
 
+    m_ps.fetch4Spec = m_module.specConst32(m_module.defIntType(32, 0), 0);
+    m_module.decorateSpecId(m_ps.fetch4Spec, getSpecId(D3D9SpecConstantId::Fetch4));
+    m_module.setDebugName(m_ps.fetch4Spec, "s_fetch4");
+
     this->setupRenderStateInfo();
     this->emitPsSharedConstants();
 
@@ -624,6 +629,9 @@ namespace dxvk {
     const bool pixel  = m_programInfo.type() == DxsoProgramTypes::PixelShader;
     const bool vertex = !pixel;
 
+    if (pixel && input && semantic.usage == DxsoUsage::Color && m_programInfo.majorVersion() < 3)
+      centroid = true;
+
     uint32_t slot = 0;
 
     uint32_t& slots = input
@@ -712,12 +720,12 @@ namespace dxvk {
           break;
       }
 
-      sampler.typeId = m_module.defImageType(
+      sampler.imageTypeId = m_module.defImageType(
         m_module.defFloatType(32),
         dimensionality, depth ? 1 : 0, 0, 0, 1,
         spv::ImageFormatUnknown);
 
-      sampler.typeId = m_module.defSampledImageType(sampler.typeId);
+      sampler.typeId = m_module.defSampledImageType(sampler.imageTypeId);
 
       sampler.varId = m_module.newVar(
         m_module.defPointerType(
@@ -1165,7 +1173,7 @@ namespace dxvk {
           this->emitDclInterface(
             false, reg.id.num,
             DxsoSemantic{ DxsoUsage::Color, reg.id.num },
-            IdentityWriteMask, false); // TODO: Do we want to make this centroid?
+            IdentityWriteMask, false);
 
           m_module.opStore(ptr.id, m_module.constfReplicant(0, ptr.type.ccount));
         }
@@ -1774,10 +1782,21 @@ namespace dxvk {
           emitRegisterLoad(src[1], mask).id);
         break;
       case DxsoOpcode::Mad:
-        result.id = m_module.opFFma(typeId,
-          emitRegisterLoad(src[0], mask).id,
-          emitRegisterLoad(src[1], mask).id,
-          emitRegisterLoad(src[2], mask).id);
+        if (!m_moduleInfo.options.longMad) {
+          result.id = m_module.opFFma(typeId,
+            emitRegisterLoad(src[0], mask).id,
+            emitRegisterLoad(src[1], mask).id,
+            emitRegisterLoad(src[2], mask).id);
+        }
+        else {
+          result.id = m_module.opFMul(typeId,
+            emitRegisterLoad(src[0], mask).id,
+            emitRegisterLoad(src[1], mask).id);
+
+          result.id = m_module.opFAdd(typeId,
+            result.id,
+            emitRegisterLoad(src[2], mask).id);
+        }
         break;
       case DxsoOpcode::Mul:
         result.id = m_module.opFMul(typeId,
@@ -2132,60 +2151,69 @@ namespace dxvk {
 
 
   void DxsoCompiler::emitMatrixAlu(const DxsoInstructionContext& ctx) {
-    const auto& src = ctx.src;
-
-    DxsoRegMask mask = ctx.dst.mask;
-
-    DxsoRegisterPointer dst = emitGetOperandPtr(ctx.dst);
-
-    DxsoRegisterValue result;
-    result.type.ctype = dst.type.ctype;
-    result.type.ccount = mask.popCount();
-
-    DxsoVectorType scalarType = result.type;
-    scalarType.ccount = 1;
-
-    const uint32_t typeId = getVectorTypeId(result.type);
-    const uint32_t scalarTypeId = getVectorTypeId(scalarType);
-
     const DxsoOpcode opcode = ctx.instruction.opcode;
 
     uint32_t dotCount;
-    uint32_t iterCount;
+    uint32_t componentCount;
 
     switch (opcode) {
       case DxsoOpcode::M3x2:
-        dotCount  = 3;
-        iterCount = 2;
+        dotCount       = 3;
+        componentCount = 2;
         break;
       case DxsoOpcode::M3x3:
-        dotCount  = 3;
-        iterCount = 3;
+        dotCount       = 3;
+        componentCount = 3;
         break;
       case DxsoOpcode::M3x4:
-        dotCount  = 3;
-        iterCount = 4;
+        dotCount       = 3;
+        componentCount = 4;
         break;
       case DxsoOpcode::M4x3:
-        dotCount  = 4;
-        iterCount = 3;
+        dotCount       = 4;
+        componentCount = 3;
         break;
       case DxsoOpcode::M4x4:
-        dotCount  = 4;
-        iterCount = 4;
+        dotCount       = 4;
+        componentCount = 4;
         break;
       default:
         Logger::warn(str::format("DxsoCompiler::emitMatrixAlu: unimplemented op ", opcode));
         return;
     }
 
+    DxsoRegisterPointer dst = emitGetOperandPtr(ctx.dst);
+
+    // Fix the dst mask if componentCount != maskCount
+    // ie. M4x3 on .xyzw.
+    uint32_t maskCnt = 0;
+    uint8_t mask = 0;
+    for (uint32_t i = 0; i < 4 && maskCnt < componentCount; i++) {
+      if (ctx.dst.mask[i]) {
+        mask |= 1 << i;
+        maskCnt++;
+      }
+    }
+    DxsoRegMask dstMask = DxsoRegMask(mask);
+
+    DxsoRegisterValue result;
+    result.type.ctype  = dst.type.ctype;
+    result.type.ccount = componentCount;
+
+    DxsoVectorType scalarType;
+    scalarType.ctype = result.type.ctype;
+    scalarType.ccount = 1;
+
+    const uint32_t typeId = getVectorTypeId(result.type);
+    const uint32_t scalarTypeId = getVectorTypeId(scalarType);
+
     DxsoRegMask srcMask(true, true, true, dotCount == 4);
     std::array<uint32_t, 4> indices;
 
-    DxsoRegister src0 = src[0];
-    DxsoRegister src1 = src[1];
+    DxsoRegister src0 = ctx.src[0];
+    DxsoRegister src1 = ctx.src[1];
 
-    for (uint32_t i = 0; i < iterCount; i++) {
+    for (uint32_t i = 0; i < componentCount; i++) {
       indices[i] = m_module.opDot(scalarTypeId,
         emitRegisterLoad(src0, srcMask).id,
         emitRegisterLoad(src1, srcMask).id);
@@ -2194,9 +2222,9 @@ namespace dxvk {
     }
 
     result.id = m_module.opCompositeConstruct(
-      typeId, iterCount, indices.data());
+      typeId, componentCount, indices.data());
 
-    this->emitDstStore(dst, result, mask, ctx.dst.saturate, emitPredicateLoad(ctx), ctx.dst.shift, ctx.dst.id);
+    this->emitDstStore(dst, result, dstMask, ctx.dst.saturate, emitPredicateLoad(ctx), ctx.dst.shift, ctx.dst.id);
   }
 
 
@@ -2689,8 +2717,6 @@ void DxsoCompiler::emitControlFlowGenericLoop(
 
       const uint32_t typeId = getVectorTypeId(result.type);
 
-      const uint32_t imageVarId = m_module.opLoad(sampler.typeId, sampler.varId);
-
       SpirvImageOperands imageOperands;
       if (m_programInfo.type() == DxsoProgramTypes::VertexShader) {
         imageOperands.sLod = m_module.constf32(0.0f);
@@ -2752,12 +2778,27 @@ void DxsoCompiler::emitControlFlowGenericLoop(
         }
       }
 
+      uint32_t fetch4 = 0;
+      if (m_programInfo.type() == DxsoProgramType::PixelShader && samplerType != SamplerTypeTexture3D) {
+        fetch4 = m_module.opBitFieldUExtract(
+          m_module.defIntType(32, 0), m_ps.fetch4Spec,
+          m_module.consti32(samplerIdx), m_module.consti32(1));
+
+        uint32_t bool_t = m_module.defBoolType();
+        fetch4 = m_module.opIEqual(bool_t, fetch4, m_module.constu32(1));
+
+        uint32_t bvec4_t = m_module.defVectorType(bool_t, 4);
+        std::array<uint32_t, 4> indices = { fetch4, fetch4, fetch4, fetch4 };
+        fetch4 = m_module.opCompositeConstruct(bvec4_t, indices.size(), indices.data());
+      }
+
       result.id = this->emitSample(
         projDivider != 0,
         typeId,
-        imageVarId,
-        texcoordVar.id,
+        sampler,
+        texcoordVar,
         reference,
+        fetch4,
         imageOperands);
 
       if (switchProjResult) {
@@ -2766,9 +2807,10 @@ void DxsoCompiler::emitControlFlowGenericLoop(
         uint32_t nonProjResult = this->emitSample(
           0,
           typeId,
-          imageVarId,
-          texcoordVar.id,
+          sampler,
+          texcoordVar,
           reference,
+          fetch4,
           imageOperands);
 
         uint32_t shouldProj = m_module.opBitFieldUExtract(
@@ -3011,43 +3053,97 @@ void DxsoCompiler::emitControlFlowGenericLoop(
   uint32_t DxsoCompiler::emitSample(
           bool                    projected,
           uint32_t                resultType,
-          uint32_t                sampledImage,
-          uint32_t                coordinates,
+          DxsoSamplerInfo&        samplerInfo,
+          DxsoRegisterValue       coordinates,
           uint32_t                reference,
+          uint32_t                fetch4,
     const SpirvImageOperands&     operands) {
     const bool depthCompare = reference != 0;
     const bool explicitLod  =
        (operands.flags & spv::ImageOperandsLodMask)
     || (operands.flags & spv::ImageOperandsGradMask);
 
+    const uint32_t sampledImage = m_module.opLoad(samplerInfo.typeId, samplerInfo.varId);
+
+    uint32_t val;
+
+    // No Fetch 4
     if (projected) {
       if (depthCompare) {
         if (explicitLod)
-          return m_module.opImageSampleProjDrefExplicitLod(resultType, sampledImage, coordinates, reference, operands);
+          val = m_module.opImageSampleProjDrefExplicitLod(resultType, sampledImage, coordinates.id, reference, operands);
         else
-          return m_module.opImageSampleProjDrefImplicitLod(resultType, sampledImage, coordinates, reference, operands);
+          val = m_module.opImageSampleProjDrefImplicitLod(resultType, sampledImage, coordinates.id, reference, operands);
       }
       else {
         if (explicitLod)
-          return m_module.opImageSampleProjExplicitLod(resultType, sampledImage, coordinates, operands);
+          val = m_module.opImageSampleProjExplicitLod(resultType, sampledImage, coordinates.id, operands);
         else
-          return m_module.opImageSampleProjImplicitLod(resultType, sampledImage, coordinates, operands);
+          val = m_module.opImageSampleProjImplicitLod(resultType, sampledImage, coordinates.id, operands);
       }
     }
     else {
       if (depthCompare) {
         if (explicitLod)
-          return m_module.opImageSampleDrefExplicitLod(resultType, sampledImage, coordinates, reference, operands);
+          val = m_module.opImageSampleDrefExplicitLod(resultType, sampledImage, coordinates.id, reference, operands);
         else
-          return m_module.opImageSampleDrefImplicitLod(resultType, sampledImage, coordinates, reference, operands);
+          val = m_module.opImageSampleDrefImplicitLod(resultType, sampledImage, coordinates.id, reference, operands);
       }
       else {
         if (explicitLod)
-          return m_module.opImageSampleExplicitLod(resultType, sampledImage, coordinates, operands);
+          val = m_module.opImageSampleExplicitLod(resultType, sampledImage, coordinates.id, operands);
         else
-          return m_module.opImageSampleImplicitLod(resultType, sampledImage, coordinates, operands);
+          val = m_module.opImageSampleImplicitLod(resultType, sampledImage, coordinates.id, operands);
       }
     }
+
+
+    if (fetch4 && !depthCompare) {
+      SpirvImageOperands fetch4Operands = operands;
+      fetch4Operands.flags &= ~spv::ImageOperandsLodMask;
+      fetch4Operands.flags &= ~spv::ImageOperandsGradMask;
+      fetch4Operands.flags &= ~spv::ImageOperandsBiasMask;
+
+      // Doesn't really work for cubes...
+      // D3D9 does support gather on 3D but we cannot :<
+      // Nothing probably relies on that though.
+      // If we come back to this ever, make sure to handle cube/3d differences.
+      if (samplerInfo.dimensions == 2) {
+        uint32_t image = m_module.opImage(samplerInfo.imageTypeId, sampledImage);
+
+        // Account for half texel offset...
+        // textureSize = 1.0f / float(2 * textureSize(sampler, 0))
+        DxsoRegisterValue textureSize;
+        textureSize.type = { DxsoScalarType::Sint32, samplerInfo.dimensions };
+        textureSize.id = m_module.opImageQuerySizeLod(getVectorTypeId(textureSize.type), image, m_module.consti32(0));
+        textureSize.id = m_module.opIMul(getVectorTypeId(textureSize.type), textureSize.id, m_module.constiReplicant(2, samplerInfo.dimensions));
+
+        textureSize.type = { DxsoScalarType::Float32, samplerInfo.dimensions };
+        textureSize.id = m_module.opConvertStoF(getVectorTypeId(textureSize.type), textureSize.id);
+        // HACK: Bias fetch4 half-texel offset to avoid a "grid" effect.
+        // Technically we should only do that for non-powers of two
+        // as only then does the imprecision need to be biased
+        // towards infinity -- but that's not really worth doing...
+        float numerator = 1.0f - 1.0f / 256.0f;
+        textureSize.id = m_module.opFDiv(getVectorTypeId(textureSize.type), m_module.constfReplicant(numerator, samplerInfo.dimensions), textureSize.id);
+
+        // coord => same dimensions as texture size (no cube here !)
+        const std::array<uint32_t, 4> naturalIndices = { 0, 1, 2, 3 };
+        coordinates.type.ccount = samplerInfo.dimensions;
+        coordinates.id = m_module.opVectorShuffle(getVectorTypeId(coordinates.type), coordinates.id, coordinates.id, coordinates.type.ccount, naturalIndices.data());
+        // coord += textureSize;
+        coordinates.id = m_module.opFAdd(getVectorTypeId(coordinates.type), coordinates.id, textureSize.id);
+      }
+
+      uint32_t fetch4Val = m_module.opImageGather(resultType, sampledImage, coordinates.id, m_module.consti32(0), fetch4Operands);
+      // B R G A swizzle... Funny D3D9 order.
+      const std::array<uint32_t, 4> indices = { 2, 0, 1, 3 };
+      fetch4Val = m_module.opVectorShuffle(resultType, fetch4Val, fetch4Val, indices.size(), indices.data());
+
+      val = m_module.opSelect(resultType, fetch4, fetch4Val, val);
+    }
+
+    return val;
   }
 
 
@@ -3292,7 +3388,7 @@ void DxsoCompiler::emitControlFlowGenericLoop(
     if (!outputtedColor1)
       OutputDefault(DxsoSemantic{ DxsoUsage::Color, 1 });
 
-    auto pointInfo = GetPointSizeInfoVS(m_module, m_vs.oPos.id, 0, 0, m_rsBlock);
+    auto pointInfo = GetPointSizeInfoVS(m_module, m_vs.oPos.id, 0, 0, m_rsBlock, false);
 
     if (m_vs.oPSize.id == 0) {
       m_vs.oPSize = this->emitRegisterPtr(
@@ -3393,7 +3489,7 @@ void DxsoCompiler::emitControlFlowGenericLoop(
 
 
   void DxsoCompiler::setupRenderStateInfo() {
-    m_rsBlock = SetupRenderStateBlock(m_module);
+    uint32_t count;
 
     // Only need alpha ref for PS 3.
     // No FF fog component.
@@ -3406,12 +3502,17 @@ void DxsoCompiler::emitControlFlowGenericLoop(
         m_interfaceSlots.pushConstOffset = 0;
         m_interfaceSlots.pushConstSize   = offsetof(D3D9RenderStateInfo, pointSize);
       }
+
+      count = 5;
     }
     else {
       m_interfaceSlots.pushConstOffset = offsetof(D3D9RenderStateInfo, pointSize);
       // Point scale never triggers on programmable
       m_interfaceSlots.pushConstSize   = sizeof(float) * 3;
+      count = 8;
     }
+
+    m_rsBlock = SetupRenderStateBlock(m_module, count);
   }
 
 
@@ -3435,6 +3536,10 @@ void DxsoCompiler::emitControlFlowGenericLoop(
     fogCtx.vPos        = m_module.opLoad(getVectorTypeId(vPosPtr.type),    vPosPtr.id);
     fogCtx.vFog        = m_module.opLoad(getVectorTypeId(vFogPtr.type),    vFogPtr.id);
     fogCtx.oColor      = m_module.opLoad(getVectorTypeId(oColor0Ptr.type), oColor0Ptr.id);
+    fogCtx.IsFixedFunction = false;
+    fogCtx.IsPositionT = false;
+    fogCtx.HasSpecular = false;
+    fogCtx.Specular    = 0;
 
     m_module.opStore(oColor0Ptr.id, DoFixedFunctionFog(m_module, fogCtx));
   }
@@ -3492,6 +3597,21 @@ void DxsoCompiler::emitControlFlowGenericLoop(
       uint32_t alphaId = m_module.opCompositeExtract(floatType,
         m_module.opLoad(m_module.defVectorType(floatType, 4), oC0.id),
         1, &alphaComponentId);
+
+      if (m_moduleInfo.options.alphaTestWiggleRoom) {
+        // NV has wonky interpolation of all 1's in a VS -> PS going to 0.999999...
+        // This causes garbage-looking graphics on people's clothing in EverQuest 2 as it does alpha == 1.0.
+
+        // My testing shows the alpha test has a precision of 1/256 for all A8 and below formats,
+        // and around 1 / 2048 for A32F formats and 1 / 4096 for A16F formats (It makes no sense to me too)
+        // so anyway, we're just going to round this to a precision of 1 / 4096 and hopefully this should make things happy
+        // everywhere.
+        const uint32_t alphaSizeId = m_module.constf32(4096.0f);
+
+        alphaId = m_module.opFMul(floatType, alphaId, alphaSizeId);
+        alphaId = m_module.opRound(floatType, alphaId);
+        alphaId = m_module.opFDiv(floatType, alphaId, alphaSizeId);
+      }
       
       // Load alpha reference
       uint32_t alphaRefMember = m_module.constu32(uint32_t(D3D9RenderStateItem::AlphaRef));

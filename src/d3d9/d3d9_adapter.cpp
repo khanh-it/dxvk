@@ -90,8 +90,10 @@ namespace dxvk {
           D3D9Format AdapterFormat,
           D3D9Format BackBufferFormat,
           BOOL       bWindowed) {
-    if (!IsSupportedBackBufferFormat(
-      AdapterFormat, BackBufferFormat, bWindowed))
+    if (!IsSupportedAdapterFormat(AdapterFormat))
+      return D3DERR_NOTAVAILABLE;
+
+    if (!IsSupportedBackBufferFormat(AdapterFormat, BackBufferFormat, bWindowed))
       return D3DERR_NOTAVAILABLE;
 
     return D3D_OK;
@@ -104,7 +106,7 @@ namespace dxvk {
           DWORD           Usage,
           D3DRESOURCETYPE RType,
           D3D9Format      CheckFormat) {
-    if (!IsSupportedAdapterFormat(AdapterFormat, false))
+    if (!IsSupportedAdapterFormat(AdapterFormat))
       return D3DERR_NOTAVAILABLE;
 
     const bool dmap = Usage & D3DUSAGE_DMAP;
@@ -212,11 +214,11 @@ namespace dxvk {
           D3D9Format AdapterFormat,
           D3D9Format RenderTargetFormat,
           D3D9Format DepthStencilFormat) {
-    if (!IsSupportedAdapterFormat(AdapterFormat, false))
-      return D3DERR_NOTAVAILABLE;
-
     if (!IsDepthFormat(DepthStencilFormat))
       return D3DERR_NOTAVAILABLE;
+
+    if (RenderTargetFormat == dxvk::D3D9Format::NULL_FORMAT)
+      return D3D_OK;
 
     auto mapping = ConvertFormatUnfixed(RenderTargetFormat);
     if (mapping.FormatColor == VK_FORMAT_UNDEFINED)
@@ -230,7 +232,7 @@ namespace dxvk {
           D3DDEVTYPE DeviceType,
           D3D9Format SourceFormat,
           D3D9Format TargetFormat) {
-    bool sourceSupported = IsSupportedBackBufferFormat(SourceFormat, FALSE);
+    bool sourceSupported = IsSupportedBackBufferFormat(D3D9Format::Unknown, SourceFormat, TRUE);
     bool targetSupported = TargetFormat == D3D9Format::X1R5G5B5
                         || TargetFormat == D3D9Format::A1R5G5B5
                         || TargetFormat == D3D9Format::R5G6B5
@@ -674,16 +676,10 @@ namespace dxvk {
     if (pRotation != nullptr)
       *pRotation = D3DDISPLAYROTATION_IDENTITY;
 
-    MONITORINFOEXW monInfo = { };
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(GetDefaultMonitor(), reinterpret_cast<MONITORINFO*>(&monInfo)))
-      throw DxvkError("D3D9Adapter::GetAdapterDisplayModeEx: Failed to query monitor info");
-
     DEVMODEW devMode = DEVMODEW();
     devMode.dmSize = sizeof(devMode);
 
-    if (!::EnumDisplaySettingsW(monInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode)) {
+    if (!GetMonitorDisplayMode(GetDefaultMonitor(), ENUM_CURRENT_SETTINGS, &devMode)) {
       Logger::err("D3D9Adapter::GetAdapterDisplayModeEx: Failed to enum display settings");
       return D3DERR_INVALIDCALL;
     }
@@ -694,7 +690,6 @@ namespace dxvk {
     pMode->RefreshRate      = devMode.dmDisplayFrequency;
     pMode->Format           = D3DFMT_X8R8G8B8;
     pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-
     return D3D_OK;
   }
 
@@ -758,19 +753,11 @@ namespace dxvk {
     if (!m_modes.empty() && m_modeCacheFormat == Format)
       return; // We already cached the modes for this format. No need to do it again.
 
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(GetDefaultMonitor(), reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("D3D9Adapter::CacheModes: failed to query monitor info");
-      return;
-    }
-
     m_modes.clear();
     m_modeCacheFormat = Format;
 
     // Skip unsupported formats
-    if (!IsSupportedAdapterFormat(Format, false))
+    if (!IsSupportedAdapterFormat(Format))
       return;
 
     auto& options = m_parent->GetOptions();
@@ -784,7 +771,7 @@ namespace dxvk {
 
     const auto forcedRatio = Ratio<DWORD>(options.forceAspectRatio);
 
-    while (::EnumDisplaySettingsW(monInfo.szDevice, modeIndex++, &devMode)) {
+    while (GetMonitorDisplayMode(GetDefaultMonitor(), modeIndex++, &devMode)) {
       // Skip interlaced modes altogether
       if (devMode.dmDisplayFlags & DM_INTERLACED)
         continue;

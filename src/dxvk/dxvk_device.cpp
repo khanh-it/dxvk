@@ -142,6 +142,12 @@ namespace dxvk {
   }
   
   
+  Rc<DxvkImage> DxvkDevice::createImageFromVkImage(
+    const DxvkImageCreateInfo&  createInfo,
+          VkImage               image) {
+    return new DxvkImage(m_vkd, createInfo, image);
+  }
+  
   Rc<DxvkImageView> DxvkDevice::createImageView(
     const Rc<DxvkImage>&            image,
     const DxvkImageViewCreateInfo&  createInfo) {
@@ -151,7 +157,7 @@ namespace dxvk {
   
   Rc<DxvkSampler> DxvkDevice::createSampler(
     const DxvkSamplerCreateInfo&  createInfo) {
-    return new DxvkSampler(m_vkd, createInfo);
+    return new DxvkSampler(this, createInfo);
   }
   
   
@@ -260,6 +266,9 @@ namespace dxvk {
     hints.preferFbDepthStencilCopy = m_extensions.extShaderStencilExport
       && (m_adapter->matchesDriver(DxvkGpuVendor::Amd, VK_DRIVER_ID_MESA_RADV_KHR, 0, 0)
        || m_adapter->matchesDriver(DxvkGpuVendor::Amd, VK_DRIVER_ID_AMD_OPEN_SOURCE_KHR, 0, 0)
+       || m_adapter->matchesDriver(DxvkGpuVendor::Amd, VK_DRIVER_ID_AMD_PROPRIETARY_KHR, 0, 0));
+    hints.preferFbResolve = m_extensions.amdShaderFragmentMask
+      && (m_adapter->matchesDriver(DxvkGpuVendor::Amd, VK_DRIVER_ID_AMD_OPEN_SOURCE_KHR, 0, 0)
        || m_adapter->matchesDriver(DxvkGpuVendor::Amd, VK_DRIVER_ID_AMD_PROPRIETARY_KHR, 0, 0));
     return hints;
   }

@@ -16,10 +16,13 @@ namespace dxvk {
     VkPhysicalDeviceProperties2                         core;
     VkPhysicalDeviceIDProperties                        coreDeviceId;
     VkPhysicalDeviceSubgroupProperties                  coreSubgroup;
+    VkPhysicalDeviceCustomBorderColorPropertiesEXT      extCustomBorderColor;
+    VkPhysicalDeviceRobustness2PropertiesEXT            extRobustness2;
     VkPhysicalDeviceTransformFeedbackPropertiesEXT      extTransformFeedback;
     VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT extVertexAttributeDivisor;
     VkPhysicalDeviceDepthStencilResolvePropertiesKHR    khrDepthStencilResolve;
     VkPhysicalDeviceDriverPropertiesKHR                 khrDeviceDriverProperties;
+    VkPhysicalDeviceFloatControlsPropertiesKHR          khrShaderFloatControls;
   };
 
 
@@ -33,10 +36,13 @@ namespace dxvk {
   struct DxvkDeviceFeatures {
     VkPhysicalDeviceFeatures2                                 core;
     VkPhysicalDeviceShaderDrawParametersFeatures              shaderDrawParameters;
-    VkPhysicalDeviceConditionalRenderingFeaturesEXT           extConditionalRendering;
+    VkPhysicalDevice4444FormatsFeaturesEXT                    ext4444Formats;
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT              extCustomBorderColor;
     VkPhysicalDeviceDepthClipEnableFeaturesEXT                extDepthClipEnable;
+    VkPhysicalDeviceExtendedDynamicStateFeaturesEXT           extExtendedDynamicState;
     VkPhysicalDeviceHostQueryResetFeaturesEXT                 extHostQueryReset;
     VkPhysicalDeviceMemoryPriorityFeaturesEXT                 extMemoryPriority;
+    VkPhysicalDeviceRobustness2FeaturesEXT                    extRobustness2;
     VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT extShaderDemoteToHelperInvocation;
     VkPhysicalDeviceTransformFeedbackFeaturesEXT              extTransformFeedback;
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT         extVertexAttributeDivisor;

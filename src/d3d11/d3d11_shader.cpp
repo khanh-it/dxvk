@@ -27,14 +27,18 @@ namespace dxvk {
     const std::string dumpPath = env::getEnvVar("DXVK_SHADER_DUMP_PATH");
     
     if (dumpPath.size() != 0) {
-      reader.store(std::ofstream(str::format(dumpPath, "/", name, ".dxbc"),
+      reader.store(std::ofstream(str::tows(str::format(dumpPath, "/", name, ".dxbc").c_str()).c_str(),
         std::ios_base::binary | std::ios_base::trunc));
     }
     
     // Decide whether we need to create a pass-through
     // geometry shader for vertex shader stream output
     bool passthroughShader = pDxbcModuleInfo->xfb != nullptr
-      && module.programInfo().type() != DxbcProgramType::GeometryShader;
+      && (module.programInfo().type() == DxbcProgramType::VertexShader
+       || module.programInfo().type() == DxbcProgramType::DomainShader);
+
+    if (module.programInfo().shaderStage() != pShaderKey->type() && !passthroughShader)
+      throw DxvkError("Mismatching shader type.");
 
     m_shader = passthroughShader
       ? module.compilePassthroughShader(*pDxbcModuleInfo, name)
@@ -43,7 +47,7 @@ namespace dxvk {
     
     if (dumpPath.size() != 0) {
       std::ofstream dumpStream(
-        str::format(dumpPath, "/", name, ".spv"),
+        str::tows(str::format(dumpPath, "/", name, ".spv").c_str()).c_str(),
         std::ios_base::binary | std::ios_base::trunc);
       
       m_shader->dump(dumpStream);

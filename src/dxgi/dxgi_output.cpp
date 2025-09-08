@@ -57,7 +57,8 @@ namespace dxvk {
      || riid == __uuidof(IDXGIOutput2)
      || riid == __uuidof(IDXGIOutput3)
      || riid == __uuidof(IDXGIOutput4)
-     || riid == __uuidof(IDXGIOutput5)) {
+     || riid == __uuidof(IDXGIOutput5)
+     || riid == __uuidof(IDXGIOutput6)) {
       *ppvObject = ref(this);
       return S_OK;
     }
@@ -121,8 +122,19 @@ namespace dxvk {
     if ((pModeToMatch->Width == 0) ^ (pModeToMatch->Height == 0))
       return DXGI_ERROR_INVALID_CALL;
 
+    DEVMODEW devMode;
+    devMode.dmSize = sizeof(devMode);
+
+    if (!GetMonitorDisplayMode(m_monitor, ENUM_CURRENT_SETTINGS, &devMode))
+      return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+
     DXGI_MODE_DESC activeMode = { };
-    GetMonitorDisplayMode(m_monitor, ENUM_CURRENT_SETTINGS, &activeMode);
+    activeMode.Width            = devMode.dmPelsWidth;
+    activeMode.Height           = devMode.dmPelsHeight;
+    activeMode.RefreshRate      = { devMode.dmDisplayFrequency, 1 };
+    activeMode.Format           = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // FIXME
+    activeMode.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
+    activeMode.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
 
     DXGI_MODE_DESC1 defaultMode;
     defaultMode.Width            = 0;
@@ -189,6 +201,26 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetDesc(DXGI_OUTPUT_DESC *pDesc) {
     if (pDesc == nullptr)
       return DXGI_ERROR_INVALID_CALL;
+
+    DXGI_OUTPUT_DESC1 desc;
+    HRESULT hr = GetDesc1(&desc);
+
+    if (SUCCEEDED(hr)) {
+      std::memcpy(pDesc->DeviceName, desc.DeviceName, sizeof(pDesc->DeviceName));
+      pDesc->DesktopCoordinates = desc.DesktopCoordinates;
+      pDesc->AttachedToDesktop  = desc.AttachedToDesktop;
+      pDesc->Rotation           = desc.Rotation;
+      pDesc->Monitor            = desc.Monitor;
+    }
+
+    return hr;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiOutput::GetDesc1(
+          DXGI_OUTPUT_DESC1*    pDesc) {
+    if (pDesc == nullptr)
+      return DXGI_ERROR_INVALID_CALL;
     
     ::MONITORINFOEXW monInfo;
     monInfo.cbSize = sizeof(monInfo);
@@ -204,10 +236,24 @@ namespace dxvk {
     pDesc->AttachedToDesktop  = 1;
     pDesc->Rotation           = DXGI_MODE_ROTATION_UNSPECIFIED;
     pDesc->Monitor            = m_monitor;
+    pDesc->BitsPerColor       = 8;
+    pDesc->ColorSpace         = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+    // We don't really have a way to get these
+    for (uint32_t i = 0; i < 2; i++) {
+      pDesc->RedPrimary[i]    = 0.0f;
+      pDesc->GreenPrimary[i]  = 0.0f;
+      pDesc->BluePrimary[i]   = 0.0f;
+      pDesc->WhitePoint[i]    = 0.0f;
+    }
+
+    pDesc->MinLuminance       = 0.0f;
+    pDesc->MaxLuminance       = 0.0f;
+    pDesc->MaxFullFrameLuminance = 0.0f;
     return S_OK;
   }
-  
-  
+
+
   HRESULT STDMETHODCALLTYPE DxgiOutput::GetDisplayModeList(
           DXGI_FORMAT    EnumFormat,
           UINT           Flags,
@@ -252,15 +298,6 @@ namespace dxvk {
       return S_OK;
     }
 
-    // Query monitor info to get the device name
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(m_monitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("DXGI: Failed to query monitor info");
-      return E_FAIL;
-    }
-    
     // Walk over all modes that the display supports and
     // return those that match the requested format etc.
     DEVMODEW devMode = { };
@@ -271,7 +308,7 @@ namespace dxvk {
     
     std::vector<DXGI_MODE_DESC1> modeList;
     
-    while (::EnumDisplaySettingsW(monInfo.szDevice, srcModeId++, &devMode)) {
+    while (GetMonitorDisplayMode(m_monitor, srcModeId++, &devMode)) {
       // Skip interlaced modes altogether
       if (devMode.dmDisplayFlags & DM_INTERLACED)
         continue;
@@ -472,6 +509,15 @@ namespace dxvk {
     return DXGI_ERROR_UNSUPPORTED;
   }
   
+
+  HRESULT STDMETHODCALLTYPE DxgiOutput::CheckHardwareCompositionSupport(
+          UINT*                 pFlags) {
+    Logger::warn("DxgiOutput: CheckHardwareCompositionSupport: Stub");
+
+    *pFlags = 0;
+    return S_OK;
+  }
+
 
   void DxgiOutput::FilterModesByDesc(
           std::vector<DXGI_MODE_DESC1>& Modes,

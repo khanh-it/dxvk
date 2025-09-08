@@ -39,11 +39,9 @@ namespace dxvk {
         VK_IMAGE_ASPECT_COLOR_BIT };
 
       case D3D9Format::A4R4G4B4: return {
-        VK_FORMAT_B4G4R4A4_UNORM_PACK16,
+        VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT,
         VK_FORMAT_UNDEFINED,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        { VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R,
-          VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_B }};
+        VK_IMAGE_ASPECT_COLOR_BIT };
 
       case D3D9Format::R3G3B2: return {}; // Unsupported
 
@@ -57,11 +55,9 @@ namespace dxvk {
       case D3D9Format::A8R3G3B2: return {}; // Unsupported
 
       case D3D9Format::X4R4G4B4: return {
-        VK_FORMAT_B4G4R4A4_UNORM_PACK16,
+        VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT,
         VK_FORMAT_UNDEFINED,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        { VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R,
-          VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_ONE }};
+        VK_IMAGE_ASPECT_COLOR_BIT };
 
       case D3D9Format::A2B10G10R10: return {
         VK_FORMAT_A2B10G10R10_UNORM_PACK32, // The A2 is out of place here. This should be investigated.
@@ -129,9 +125,26 @@ namespace dxvk {
         { VK_COMPONENT_SWIZZLE_R,   VK_COMPONENT_SWIZZLE_G,
           VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE }};
 
-      case D3D9Format::L6V5U5: return {}; // Unsupported
+      case D3D9Format::L6V5U5: return {
+        // Any PACK16 format will do...
+        VK_FORMAT_B5G6R5_UNORM_PACK16,
+        VK_FORMAT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+          VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A },
+        { D3D9ConversionFormat_L6V5U5, 1u,
+        // Convert -> float (this is a mixed snorm and unorm type)
+          VK_FORMAT_R16G16B16A16_SFLOAT } };
 
-      case D3D9Format::X8L8V8U8: return {}; // Unsupported
+      case D3D9Format::X8L8V8U8: return {
+        VK_FORMAT_B8G8R8A8_UNORM,
+        VK_FORMAT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+          VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_ONE },
+        { D3D9ConversionFormat_X8L8V8U8, 1u,
+        // Convert -> float (this is a mixed snorm and unorm type)
+          VK_FORMAT_R16G16B16A16_SFLOAT } };
 
       case D3D9Format::Q8W8V8U8: return {
         VK_FORMAT_R8G8B8A8_SNORM,
@@ -145,7 +158,15 @@ namespace dxvk {
         { VK_COMPONENT_SWIZZLE_R,   VK_COMPONENT_SWIZZLE_G,
           VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE }};
 
-      case D3D9Format::A2W10V10U10: return {}; // Unsupported
+      case D3D9Format::A2W10V10U10: return {
+        VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+        VK_FORMAT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G,
+          VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A },
+        { D3D9ConversionFormat_A2W10V10U10, 1u,
+        // Convert -> float (this is a mixed snorm and unorm type)
+          VK_FORMAT_R16G16B16A16_SFLOAT } };
 
       case D3D9Format::UYVY: return {
         VK_FORMAT_B8G8R8A8_UNORM,
@@ -153,7 +174,7 @@ namespace dxvk {
         VK_IMAGE_ASPECT_COLOR_BIT,
         { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
           VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY },
-        { D3D9ConversionFormat_UYVY, { 2u, 1u } }
+        { D3D9ConversionFormat_UYVY, 1u }
       };
 
       case D3D9Format::R8G8_B8G8: return {
@@ -167,7 +188,7 @@ namespace dxvk {
         VK_IMAGE_ASPECT_COLOR_BIT,
         { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
           VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY },
-        { D3D9ConversionFormat_YUY2, { 2u, 1u } }
+        { D3D9ConversionFormat_YUY2, 1u }
       };
 
       case D3D9Format::G8R8_G8B8: return {
@@ -381,6 +402,24 @@ namespace dxvk {
         { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R,
           VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R }};
 
+      case D3D9Format::NV12: return {
+        VK_FORMAT_R8_UNORM,
+        VK_FORMAT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+          VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY },
+        { D3D9ConversionFormat_NV12, 2u, VK_FORMAT_B8G8R8A8_UNORM }
+      };
+
+      case D3D9Format::YV12: return {
+        VK_FORMAT_R8_UNORM,
+        VK_FORMAT_UNDEFINED,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+          VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY },
+        { D3D9ConversionFormat_YV12, 3u, VK_FORMAT_B8G8R8A8_UNORM }
+      };
+
       case D3D9Format::RAWZ: return {}; // Unsupported
 
       default:
@@ -408,6 +447,10 @@ namespace dxvk {
       VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
       VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
 
+    // VK_EXT_4444_formats
+    m_a4r4g4b4Support = CheckImageFormatSupport(adapter, VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT,
+      VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+
     if (!m_d24s8Support)
       Logger::warn("D3D9: VK_FORMAT_D24_UNORM_S8_UINT -> VK_FORMAT_D32_SFLOAT_S8_UINT");
 
@@ -417,6 +460,9 @@ namespace dxvk {
       else
         Logger::warn("D3D9: VK_FORMAT_D16_UNORM_S8_UINT -> VK_FORMAT_D32_SFLOAT_S8_UINT");
     }
+
+    if (!m_a4r4g4b4Support)
+      Logger::warn("D3D9: VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT -> VK_FORMAT_B4G4R4A4_UNORM_PACK16");
   }
 
   D3D9_VK_FORMAT_MAPPING D3D9VkFormatTable::GetFormatMapping(
@@ -440,6 +486,17 @@ namespace dxvk {
 
     if (!m_d16s8Support && mapping.FormatColor == VK_FORMAT_D16_UNORM_S8_UINT)
       mapping.FormatColor = m_d24s8Support ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
+
+    if (!m_a4r4g4b4Support && mapping.FormatColor == VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT) {
+      VkComponentSwizzle alphaSwizzle = Format == D3D9Format::A4R4G4B4
+        ? VK_COMPONENT_SWIZZLE_B
+        : VK_COMPONENT_SWIZZLE_ONE;
+
+      mapping.FormatColor = VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+      mapping.Swizzle     = {
+        VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R,
+        VK_COMPONENT_SWIZZLE_A, alphaSwizzle };
+    }
 
     return mapping;
   }

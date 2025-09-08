@@ -42,13 +42,13 @@ namespace dxvk {
     m_dxbcOptions   (m_dxvkDevice, m_d3d11Options) {
     m_initializer = new D3D11Initializer(this);
     m_context     = new D3D11ImmediateContext(this, m_dxvkDevice);
-    m_d3d10Device = new D3D10Device(this, m_context);
+    m_d3d10Device = new D3D10Device(this, m_context.ptr());
   }
   
   
   D3D11Device::~D3D11Device() {
     delete m_d3d10Device;
-    delete m_context;
+    m_context = nullptr;
     delete m_initializer;
   }
   
@@ -611,6 +611,9 @@ namespace dxvk {
         // generate the exact vertex layout. In that case we'll
         // pack attributes on the same binding in the order they
         // are declared, aligning each attribute to four bytes.
+        const DxvkFormatInfo* formatInfo = imageFormatInfo(attrib.format);
+        VkDeviceSize alignment = std::min<VkDeviceSize>(formatInfo->elementSize, 4);
+
         if (attrib.offset == D3D11_APPEND_ALIGNED_ELEMENT) {
           attrib.offset = 0;
           
@@ -618,12 +621,12 @@ namespace dxvk {
             const DxvkVertexAttribute& prev = attrList.at(i - j);
             
             if (prev.binding == attrib.binding) {
-              const DxvkFormatInfo* formatInfo = imageFormatInfo(prev.format);
-              attrib.offset = align(prev.offset + formatInfo->elementSize, 4);
+              attrib.offset = align(prev.offset + imageFormatInfo(prev.format)->elementSize, alignment);
               break;
             }
           }
-        }
+        } else if (attrib.offset & (alignment - 1))
+          return E_INVALIDARG;
 
         attrList.at(i) = attrib;
         
@@ -780,12 +783,8 @@ namespace dxvk {
     InitReturnPtr(ppGeometryShader);
     D3D11CommonShader module;
 
-    if (!m_dxvkDevice->features().extTransformFeedback.transformFeedback) {
-      Logger::err(
-        "D3D11: CreateGeometryShaderWithStreamOutput:"
-        "\n  Transform feedback not supported by device");
-      return S_OK;
-    }
+    if (!m_dxvkDevice->features().extTransformFeedback.transformFeedback)
+      return DXGI_ERROR_INVALID_CALL;
 
     // Zero-init some counterss so that we can increment
     // them while walking over the stream output entries
@@ -1761,22 +1760,22 @@ namespace dxvk {
   
   
   void STDMETHODCALLTYPE D3D11Device::GetImmediateContext(ID3D11DeviceContext** ppImmediateContext) {
-    *ppImmediateContext = ref(m_context);
+    *ppImmediateContext = m_context.ref();
   }
 
 
   void STDMETHODCALLTYPE D3D11Device::GetImmediateContext1(ID3D11DeviceContext1** ppImmediateContext) {
-    *ppImmediateContext = ref(m_context);
+    *ppImmediateContext = m_context.ref();
   }
   
   
   void STDMETHODCALLTYPE D3D11Device::GetImmediateContext2(ID3D11DeviceContext2** ppImmediateContext) {
-    *ppImmediateContext = ref(m_context);
+    *ppImmediateContext = m_context.ref();
   }
   
   
   void STDMETHODCALLTYPE D3D11Device::GetImmediateContext3(ID3D11DeviceContext3** ppImmediateContext) {
-    *ppImmediateContext = ref(m_context);
+    *ppImmediateContext = m_context.ref();
   }
   
   
@@ -1907,11 +1906,20 @@ namespace dxvk {
 
     enabled.extMemoryPriority.memoryPriority                      = supported.extMemoryPriority.memoryPriority;
 
+    enabled.extRobustness2.robustBufferAccess2                    = supported.extRobustness2.robustBufferAccess2;
+    enabled.extRobustness2.robustImageAccess2                     = supported.extRobustness2.robustImageAccess2;
+    enabled.extRobustness2.nullDescriptor                         = supported.extRobustness2.nullDescriptor;
+
     enabled.extShaderDemoteToHelperInvocation.shaderDemoteToHelperInvocation  = supported.extShaderDemoteToHelperInvocation.shaderDemoteToHelperInvocation;
 
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor      = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor;
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor  = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor;
     
+    if (supported.extCustomBorderColor.customBorderColorWithoutFormat) {
+      enabled.extCustomBorderColor.customBorderColors             = supported.extCustomBorderColor.customBorderColors;
+      enabled.extCustomBorderColor.customBorderColorWithoutFormat = supported.extCustomBorderColor.customBorderColorWithoutFormat;
+    }
+
     if (featureLevel >= D3D_FEATURE_LEVEL_9_1) {
       enabled.core.features.depthClamp                            = supported.core.features.depthClamp;
       enabled.core.features.depthBiasClamp                        = supported.core.features.depthBiasClamp;
@@ -1940,7 +1948,6 @@ namespace dxvk {
       enabled.core.features.logicOp                               = supported.core.features.logicOp;
       enabled.core.features.shaderImageGatherExtended             = supported.core.features.shaderImageGatherExtended;
       enabled.core.features.variableMultisampleRate               = supported.core.features.variableMultisampleRate;
-      enabled.extConditionalRendering.conditionalRendering        = supported.extConditionalRendering.conditionalRendering;
       enabled.extTransformFeedback.transformFeedback              = supported.extTransformFeedback.transformFeedback;
       enabled.extTransformFeedback.geometryStreams                = supported.extTransformFeedback.geometryStreams;
     }
@@ -2527,7 +2534,8 @@ namespace dxvk {
       return S_OK;
     }
     
-    if (riid == __uuidof(IDXGIVkInteropDevice)) {
+    if (riid == __uuidof(IDXGIVkInteropDevice)
+     || riid == __uuidof(IDXGIVkInteropDevice1)) {
       *ppvObject = ref(&m_d3d11Interop);
       return S_OK;
     }

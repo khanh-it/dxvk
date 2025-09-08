@@ -42,6 +42,8 @@ namespace dxvk {
     BOOL                Discard;
     D3DMULTISAMPLE_TYPE MultiSample;
     DWORD               MultisampleQuality;
+    BOOL                IsBackBuffer;
+    BOOL                IsAttachmentOnly;
   };
 
   struct D3D9ColorView {
@@ -245,6 +247,14 @@ namespace dxvk {
     }
 
     /**
+     * \brief Depth stencil
+     * \returns Whether a resource is a depth stencil or not
+     */
+    bool IsDepthStencil() const {
+      return m_desc.Usage & D3DUSAGE_DEPTHSTENCIL;
+    }
+
+    /**
      * \brief Autogen Mipmap
      * \returns Whether the texture is to have automatic mip generation
      */
@@ -272,7 +282,7 @@ namespace dxvk {
      * \returns The extent of the top-level mip
      */
     VkExtent3D GetExtent() const {
-      return m_adjustedExtent;
+      return VkExtent3D{ m_desc.Width, m_desc.Height, m_desc.Depth };
     }
 
     /**
@@ -294,15 +304,19 @@ namespace dxvk {
 
     const D3D9_VK_FORMAT_MAPPING& GetMapping() { return m_mapping; }
 
-    bool MarkLocked(UINT Subresource, bool value) { return m_locked.exchange(Subresource, value); }
+    void SetLocked(UINT Subresource, bool value) { m_locked.set(Subresource, value); }
 
-    bool SetDirty(UINT Subresource, bool value) { return m_dirty.exchange(Subresource, value); }
+    bool GetLocked(UINT Subresource) const { return m_locked.get(Subresource); }
+
+    void SetDirty(UINT Subresource, bool value) { m_dirty.set(Subresource, value); }
+
+    bool GetDirty(UINT Subresource) const { return m_dirty.get(Subresource); }
 
     void MarkAllDirty() { m_dirty.setAll(); }
 
     void SetReadOnlyLocked(UINT Subresource, bool readOnly) { return m_readOnly.set(Subresource, readOnly); }
 
-    bool GetReadOnlyLocked(UINT Subresource) { return m_readOnly.get(Subresource); }
+    bool GetReadOnlyLocked(UINT Subresource) const { return m_readOnly.get(Subresource); }
 
     const Rc<DxvkImageView>& GetSampleView(bool srgb) const {
       return m_sampleView.Pick(srgb && IsSrgbCompatible());
@@ -316,12 +330,19 @@ namespace dxvk {
         : VK_IMAGE_LAYOUT_GENERAL;
     }
 
-    VkImageLayout DetermineDepthStencilLayout() const {
-      return m_image != nullptr &&
-             m_image->info().tiling == VK_IMAGE_TILING_OPTIMAL &&
-            !m_hazardous
-        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-        : VK_IMAGE_LAYOUT_GENERAL;
+    VkImageLayout DetermineDepthStencilLayout(bool write, bool hazardous) const {
+      VkImageLayout layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+      if (unlikely(hazardous)) {
+        layout = write
+          ? VK_IMAGE_LAYOUT_GENERAL
+          : VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL;
+      }
+
+      if (unlikely(m_image->info().tiling != VK_IMAGE_TILING_OPTIMAL))
+        layout = VK_IMAGE_LAYOUT_GENERAL;
+
+      return layout;
     }
 
     Rc<DxvkImageView> CreateView(
@@ -331,13 +352,55 @@ namespace dxvk {
             bool                   Srgb);
     D3D9SubresourceBitset& GetUploadBitmask() { return m_needsUpload; }
 
-    void SetUploading(UINT Subresource, bool uploading) { m_uploading.set(Subresource, uploading); }
-    void ClearUploading() { m_uploading.clearAll(); }
-    bool GetUploading(UINT Subresource) const { return m_uploading.get(Subresource); }
-
     void SetNeedsUpload(UINT Subresource, bool upload) { m_needsUpload.set(Subresource, upload); }
+    bool GetNeedsUpload(UINT Subresource) const        { return m_needsUpload.get(Subresource); }
     bool NeedsAnyUpload() { return m_needsUpload.any(); }
     void ClearNeedsUpload() { return m_needsUpload.clearAll();  }
+
+    void SetNeedsMipGen(bool value) { m_needsMipGen = value; }
+    bool NeedsMipGen() const { return m_needsMipGen; }
+
+    DWORD ExposedMipLevels() { return m_exposedMipLevels; }
+
+    void SetMipFilter(D3DTEXTUREFILTERTYPE filter) { m_mipFilter = filter; }
+    D3DTEXTUREFILTERTYPE GetMipFilter() const { return m_mipFilter; }
+
+    void PreLoadAll();
+    void PreLoadSubresource(UINT Subresource);
+
+    void AddUpdateDirtyBox(CONST D3DBOX* pDirtyBox, uint32_t layer) {
+      if (pDirtyBox) {
+        D3DBOX box = *pDirtyBox;
+        if (box.Right <= box.Left
+          || box.Bottom <= box.Top
+          || box.Back <= box.Front)
+          return;
+
+        D3DBOX& updateBox = m_updateDirtyBoxes[layer];
+        if (updateBox.Left == updateBox.Right) {
+          updateBox = box;
+        } else {
+          updateBox.Left    = std::min(updateBox.Left,   box.Left);
+          updateBox.Right   = std::max(updateBox.Right,  box.Right);
+          updateBox.Top     = std::min(updateBox.Top,    box.Top);
+          updateBox.Bottom  = std::max(updateBox.Bottom, box.Bottom);
+          updateBox.Front   = std::min(updateBox.Front,  box.Front);
+          updateBox.Back    = std::max(updateBox.Back,   box.Back);
+        }
+      } else {
+        m_updateDirtyBoxes[layer] = { 0, 0, m_desc.Width, m_desc.Height, 0, m_desc.Depth };
+      }
+    }
+
+    void ClearUpdateDirtyBoxes() {
+      for (uint32_t i = 0; i < m_updateDirtyBoxes.size(); i++) {
+        m_updateDirtyBoxes[i] = { 0, 0, 0, 0, 0, 0 };
+      }
+    }
+
+    const D3DBOX& GetUpdateDirtyBox(uint32_t layer) const {
+      return m_updateDirtyBoxes[layer];
+    }
 
   private:
 
@@ -355,8 +418,6 @@ namespace dxvk {
 
     D3D9_VK_FORMAT_MAPPING        m_mapping;
 
-    VkExtent3D                    m_adjustedExtent;
-
     bool                          m_shadow; //< Depth Compare-ness
 
     int64_t                       m_size = 0;
@@ -373,8 +434,15 @@ namespace dxvk {
 
     D3D9SubresourceBitset         m_dirty = { };
 
-    D3D9SubresourceBitset         m_uploading = { };
     D3D9SubresourceBitset         m_needsUpload = { };
+
+    DWORD                         m_exposedMipLevels = 0;
+
+    bool                          m_needsMipGen = false;
+
+    D3DTEXTUREFILTERTYPE          m_mipFilter = D3DTEXF_LINEAR;
+
+    std::array<D3DBOX, 6>         m_updateDirtyBoxes;
 
     /**
      * \brief Mip level
@@ -406,15 +474,15 @@ namespace dxvk {
       return D3D9_COMMON_TEXTURE_MAP_MODE_BACKED;
     }
 
+    VkImageLayout OptimizeLayout(
+            VkImageUsageFlags         Usage) const;
+
     static VkImageType GetImageTypeFromResourceType(
             D3DRESOURCETYPE  Dimension);
 
     static VkImageViewType GetImageViewTypeFromResourceType(
             D3DRESOURCETYPE  Dimension,
             UINT             Layer);
-
-    static VkImageLayout OptimizeLayout(
-            VkImageUsageFlags         Usage);
 
     static constexpr UINT AllLayers = UINT32_MAX;
 

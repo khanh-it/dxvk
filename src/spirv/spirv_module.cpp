@@ -38,17 +38,24 @@ namespace dxvk {
   }
   
   
+  bool SpirvModule::hasCapability(
+          spv::Capability         capability) {
+    for (auto ins : m_capabilities) {
+      if (ins.opCode() == spv::OpCapability && ins.arg(1) == capability)
+        return true;
+    }
+
+    return false;
+  }
+
   void SpirvModule::enableCapability(
           spv::Capability         capability) {
     // Scan the generated instructions to check
     // whether we already enabled the capability.
-    for (auto ins : m_capabilities) {
-      if (ins.opCode() == spv::OpCapability && ins.arg(1) == capability)
-        return;
+    if (!hasCapability(capability)) {
+      m_capabilities.putIns (spv::OpCapability, 2);
+      m_capabilities.putWord(capability);
     }
-    
-    m_capabilities.putIns (spv::OpCapability, 2);
-    m_capabilities.putWord(capability);
   }
   
   
@@ -93,6 +100,20 @@ namespace dxvk {
   }
   
   
+  void SpirvModule::setExecutionMode(
+          uint32_t                entryPointId,
+          spv::ExecutionMode      executionMode,
+          uint32_t                argCount,
+    const uint32_t*               args) {
+    m_execModeInfo.putIns (spv::OpExecutionMode, 3 + argCount);
+    m_execModeInfo.putWord(entryPointId);
+    m_execModeInfo.putWord(executionMode);
+
+    for (uint32_t i = 0; i < argCount; i++)
+      m_execModeInfo.putWord(args[i]);
+  }
+
+
   void SpirvModule::setInvocations(
           uint32_t                entryPointId,
           uint32_t                invocations) {
@@ -392,6 +413,42 @@ namespace dxvk {
       return args[0];
     
     uint32_t scalarTypeId = this->defBoolType();
+    uint32_t vectorTypeId = this->defVectorType(scalarTypeId, count);
+    
+    return this->constComposite(vectorTypeId, count, args.data());
+  }
+
+
+  uint32_t SpirvModule::constiReplicant(
+          int32_t                 replicant,
+          uint32_t                count) {
+    uint32_t value = this->consti32(replicant);
+
+    std::array<uint32_t, 4> args = { value, value, value, value };
+
+    // Can't make a scalar composite.
+    if (count == 1)
+      return args[0];
+    
+    uint32_t scalarTypeId = this->defIntType(32, 1);
+    uint32_t vectorTypeId = this->defVectorType(scalarTypeId, count);
+    
+    return this->constComposite(vectorTypeId, count, args.data());
+  }
+
+
+  uint32_t SpirvModule::constuReplicant(
+          int32_t                 replicant,
+          uint32_t                count) {
+    uint32_t value = this->constu32(replicant);
+
+    std::array<uint32_t, 4> args = { value, value, value, value };
+
+    // Can't make a scalar composite.
+    if (count == 1)
+      return args[0];
+    
+    uint32_t scalarTypeId = this->defIntType(32, 0);
     uint32_t vectorTypeId = this->defVectorType(scalarTypeId, count);
     
     return this->constComposite(vectorTypeId, count, args.data());
@@ -2876,6 +2933,19 @@ namespace dxvk {
   }
 
 
+  uint32_t SpirvModule::opIsInf(
+          uint32_t                resultType,
+          uint32_t                operand) {
+    uint32_t resultId = this->allocateId();
+    
+    m_code.putIns (spv::OpIsInf, 4);
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(operand);
+    return resultId;
+  }
+
+
   uint32_t SpirvModule::opFunctionCall(
           uint32_t                resultType,
           uint32_t                functionId,
@@ -2967,6 +3037,19 @@ namespace dxvk {
     m_code.putWord(spv::GLSLstd450InterpolateAtOffset);
     m_code.putWord(interpolant);
     m_code.putWord(offset);
+    return resultId;
+  }
+
+
+  uint32_t SpirvModule::opImage(
+          uint32_t                resultType,
+          uint32_t                sampledImage) {
+    uint32_t resultId = this->allocateId();
+
+    m_code.putIns(spv::OpImage, 4);
+    m_code.putWord(resultType);
+    m_code.putWord(resultId);
+    m_code.putWord(sampledImage);
     return resultId;
   }
   

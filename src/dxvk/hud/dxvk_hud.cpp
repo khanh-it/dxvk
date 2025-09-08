@@ -8,7 +8,12 @@ namespace dxvk::hud {
     const Rc<DxvkDevice>& device)
   : m_device        (device),
     m_renderer      (device),
-    m_hudItems      (device) {
+    m_hudItems      (device),
+    m_scale         (m_hudItems.getOption<float>("scale", 1.0f)) {
+    // Sanitize scaling factor
+    if (m_scale < 0.01f)
+      m_scale = 1.0f;
+
     // Set up constant state
     m_rsState.polygonMode       = VK_POLYGON_MODE_FILL;
     m_rsState.cullMode          = VK_CULL_MODE_BACK_BIT;
@@ -73,11 +78,24 @@ namespace dxvk::hud {
           VkExtent2D        surfaceSize) {
     bool isSrgb = imageFormatInfo(surfaceFormat.format)->flags.test(DxvkFormatFlag::ColorSpaceSrgb);
 
+    VkViewport viewport;
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = float(surfaceSize.width);
+    viewport.height = float(surfaceSize.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor;
+    scissor.offset = { 0, 0 };
+    scissor.extent = surfaceSize;
+
+    ctx->setViewports(1, &viewport, &scissor);
     ctx->setRasterizerState(m_rsState);
     ctx->setBlendMode(0, m_blendMode);
 
     ctx->setSpecConstant(VK_PIPELINE_BIND_POINT_GRAPHICS, 0, isSrgb);
-    m_renderer.beginFrame(ctx, surfaceSize);
+    m_renderer.beginFrame(ctx, surfaceSize, m_scale);
   }
 
 

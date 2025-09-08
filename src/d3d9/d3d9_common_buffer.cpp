@@ -50,6 +50,16 @@ namespace dxvk {
   }
 
 
+  void D3D9CommonBuffer::PreLoad() {
+    if (IsPoolManaged(m_desc.Pool)) {
+      auto lock = m_parent->LockDevice();
+
+      if (NeedsUpload())
+        m_parent->FlushBuffer(this);
+    }
+  }
+
+
   Rc<DxvkBuffer> D3D9CommonBuffer::CreateBuffer() const {
     DxvkBufferCreateInfo  info;
     info.size   = m_desc.Size;
@@ -82,7 +92,7 @@ namespace dxvk {
 
       if (!(m_desc.Usage & D3DUSAGE_WRITEONLY))
         info.access |= VK_ACCESS_HOST_READ_BIT;
-        
+
       memoryFlags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
                   |  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
                   |  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -93,6 +103,11 @@ namespace dxvk {
       info.access |= VK_ACCESS_TRANSFER_WRITE_BIT;
 
       memoryFlags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    }
+
+    if (memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT && m_parent->GetOptions()->apitraceMode) {
+      memoryFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                  |  VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     }
 
     return m_parent->GetDXVKDevice()->createBuffer(info, memoryFlags);

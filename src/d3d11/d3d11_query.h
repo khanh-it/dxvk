@@ -30,9 +30,6 @@ namespace dxvk {
             REFIID  riid,
             void**  ppvObject) final;
     
-    void STDMETHODCALLTYPE GetDevice(
-            ID3D11Device** ppDevice) final;
-    
     UINT STDMETHODCALLTYPE GetDataSize();
     
     void STDMETHODCALLTYPE GetDesc(D3D11_QUERY_DESC* pDesc) final;
@@ -51,8 +48,6 @@ namespace dxvk {
             void*                             pData,
             UINT                              GetDataFlags);
     
-    DxvkBufferSlice GetPredicate(DxvkContext* ctx);
-
     void DoDeferredEnd() {
       m_state = D3D11_VK_QUERY_ENDED;
       m_resetCtr.fetch_add(1, std::memory_order_acquire);
@@ -98,16 +93,12 @@ namespace dxvk {
     
   private:
     
-    D3D11Device* const m_device;
     D3D11_QUERY_DESC1  m_desc;
 
     D3D11_VK_QUERY_STATE m_state;
     
     std::array<Rc<DxvkGpuQuery>, MaxGpuQueries> m_query;
     std::array<Rc<DxvkGpuEvent>, MaxGpuEvents>  m_event;
-
-    sync::Spinlock m_predicateLock;
-    Rc<DxvkBuffer> m_predicate;
 
     D3D10Query m_d3d10;
 
@@ -117,8 +108,6 @@ namespace dxvk {
     std::atomic<uint32_t> m_resetCtr = { 0u };
 
     UINT64 GetTimestampQueryFrequency() const;
-
-    Rc<DxvkBuffer> CreatePredicateBuffer();
     
   };
   

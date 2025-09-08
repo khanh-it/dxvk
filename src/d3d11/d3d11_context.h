@@ -39,8 +39,6 @@ namespace dxvk {
             ID3D11View*                      pResourceView,
       const D3D11_RECT*                      pRects,
             UINT                             NumRects);
-
-    void STDMETHODCALLTYPE GetDevice(ID3D11Device **ppDevice);
     
     void STDMETHODCALLTYPE ClearState();
     
@@ -706,7 +704,6 @@ namespace dxvk {
 
   protected:
     
-    D3D11Device* const          m_parent;
     D3D11DeviceContextExt       m_contextExt;
     D3D11UserDefinedAnnotation  m_annotation;
     D3D10Multithread            m_multithread;
@@ -764,10 +761,6 @@ namespace dxvk {
     
     void BindConstantBuffer(
             UINT                              Slot,
-            D3D11Buffer*                      pBuffer);
-    
-    void BindConstantBuffer1(
-            UINT                              Slot,
             D3D11Buffer*                      pBuffer,
             UINT                              Offset,
             UINT                              Length);
@@ -792,6 +785,9 @@ namespace dxvk {
     void DiscardTexture(
             ID3D11Resource*                   pResource,
             UINT                              Subresource);
+    
+    void SetIndexBufferOptimized(
+            BOOL                              Enable);
     
     void SetDrawBuffers(
             ID3D11Buffer*                     pBufferForArgs,
@@ -921,6 +917,14 @@ namespace dxvk {
       return pShader != nullptr ? pShader->GetCommonShader() : nullptr;
     }
 
+    static uint32_t GetIndirectCommandStride(const D3D11CmdDrawIndirectData* cmdData, uint32_t offset, uint32_t minStride) {
+      if (likely(cmdData->stride))
+        return cmdData->offset + cmdData->count * cmdData->stride == offset ? cmdData->stride : 0;
+
+      uint32_t stride = offset - cmdData->offset;
+      return stride >= minStride && stride <= 32 ? stride : 0;
+    }
+    
     template<typename Cmd>
     void EmitCs(Cmd&& command) {
       m_cmdData = nullptr;

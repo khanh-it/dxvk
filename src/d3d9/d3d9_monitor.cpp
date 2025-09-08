@@ -26,12 +26,11 @@ namespace dxvk {
 
 
   bool IsSupportedAdapterFormat(
-          D3D9Format Format,
-          BOOL       Windowed) {
-    return (Format == D3D9Format::A2R10G10B10 && !Windowed)
-         || Format == D3D9Format::X8R8G8B8
-         || Format == D3D9Format::X1R5G5B5
-         || Format == D3D9Format::R5G6B5;
+          D3D9Format Format) {
+    return Format == D3D9Format::A2R10G10B10
+        || Format == D3D9Format::X8R8G8B8
+        || Format == D3D9Format::X1R5G5B5
+        || Format == D3D9Format::R5G6B5;
   }
 
 
@@ -39,123 +38,26 @@ namespace dxvk {
           D3D9Format AdapterFormat,
           D3D9Format BackBufferFormat,
           BOOL       Windowed) {
-    if (!IsSupportedAdapterFormat(AdapterFormat, Windowed))
-      return false;
+    if (!Windowed) {
+      return (AdapterFormat == D3D9Format::A2R10G10B10 && BackBufferFormat == D3D9Format::A2R10G10B10) ||
+             (AdapterFormat == D3D9Format::X8R8G8B8    && BackBufferFormat == D3D9Format::X8R8G8B8) ||
+             (AdapterFormat == D3D9Format::X8R8G8B8    && BackBufferFormat == D3D9Format::A8R8G8B8) ||
+             (AdapterFormat == D3D9Format::X1R5G5B5    && BackBufferFormat == D3D9Format::X1R5G5B5) ||
+             (AdapterFormat == D3D9Format::X1R5G5B5    && BackBufferFormat == D3D9Format::A1R5G5B5) ||
+             (AdapterFormat == D3D9Format::R5G6B5      && BackBufferFormat == D3D9Format::R5G6B5);
+    }
 
-    return AdapterFormat == BackBufferFormat
-        || (AdapterFormat == D3D9Format::X8R8G8B8 && BackBufferFormat == D3D9Format::A8R8G8B8)
-        || (AdapterFormat == D3D9Format::X1R5G5B5 && BackBufferFormat == D3D9Format::A1R5G5B5);
+    return IsSupportedBackBufferFormat(BackBufferFormat);
   }
-
 
   bool IsSupportedBackBufferFormat(
-          D3D9Format BackBufferFormat,
-          BOOL       Windowed) {
-    return (BackBufferFormat == D3D9Format::A2R10G10B10 && !Windowed)
-         || BackBufferFormat == D3D9Format::A8R8G8B8
-         || BackBufferFormat == D3D9Format::X8R8G8B8
-         || BackBufferFormat == D3D9Format::A1R5G5B5
-         || BackBufferFormat == D3D9Format::X1R5G5B5
-         || BackBufferFormat == D3D9Format::R5G6B5;
-  }
-
-
-  HMONITOR GetDefaultMonitor() {
-    return ::MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
-  }
-
-
-  HRESULT SetMonitorDisplayMode(
-          HMONITOR                hMonitor,
-    const D3DDISPLAYMODEEX*       pMode) {
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(hMonitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("D3D9: Failed to query monitor info");
-      return E_FAIL;
-    }
-    
-    DEVMODEW devMode = { };
-    devMode.dmSize       = sizeof(devMode);
-    devMode.dmFields     = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
-    devMode.dmPelsWidth  = pMode->Width;
-    devMode.dmPelsHeight = pMode->Height;
-    devMode.dmBitsPerPel = GetMonitorFormatBpp(EnumerateFormat(pMode->Format));
-    
-    if (pMode->RefreshRate != 0)  {
-      devMode.dmFields |= DM_DISPLAYFREQUENCY;
-      devMode.dmDisplayFrequency = pMode->RefreshRate;
-    }
-    
-    Logger::info(str::format("D3D9: Setting display mode: ",
-      devMode.dmPelsWidth, "x", devMode.dmPelsHeight, "@",
-      devMode.dmDisplayFrequency));
-    
-    LONG status = ::ChangeDisplaySettingsExW(
-      monInfo.szDevice, &devMode, nullptr, CDS_FULLSCREEN, nullptr);
-
-    if (status != DISP_CHANGE_SUCCESSFUL) {
-      // Try again but without setting the frequency.
-      devMode.dmFields &= ~DM_DISPLAYFREQUENCY;
-      devMode.dmDisplayFrequency = 0;
-      status = ::ChangeDisplaySettingsExW(
-        monInfo.szDevice, &devMode, nullptr, CDS_FULLSCREEN, nullptr);
-    }
-    
-    return status == DISP_CHANGE_SUCCESSFUL ? D3D_OK : D3DERR_NOTAVAILABLE;
-  }
-
-
-  void GetWindowClientSize(
-          HWND                    hWnd,
-          UINT*                   pWidth,
-          UINT*                   pHeight) {
-    RECT rect = { };
-    ::GetClientRect(hWnd, &rect);
-    
-    if (pWidth)
-      *pWidth = rect.right - rect.left;
-    
-    if (pHeight)
-      *pHeight = rect.bottom - rect.top;
-  }
-
-
-  void GetMonitorClientSize(
-          HMONITOR                hMonitor,
-          UINT*                   pWidth,
-          UINT*                   pHeight) {
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(hMonitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("D3D9: Failed to query monitor info");
-      return;
-    }
-    
-    auto rect = monInfo.rcMonitor;
-
-    if (pWidth)
-      *pWidth = rect.right - rect.left;
-    
-    if (pHeight)
-      *pHeight = rect.bottom - rect.top;
-  }
-
-
-  void GetMonitorRect(
-          HMONITOR                hMonitor,
-          RECT*                   pRect) {
-    ::MONITORINFOEXW monInfo;
-    monInfo.cbSize = sizeof(monInfo);
-
-    if (!::GetMonitorInfoW(hMonitor, reinterpret_cast<MONITORINFO*>(&monInfo))) {
-      Logger::err("D3D9: Failed to query monitor info");
-      return;
-    }
-
-    *pRect = monInfo.rcMonitor;
+        D3D9Format BackBufferFormat) {
+    return BackBufferFormat == D3D9Format::A2R10G10B10
+        || BackBufferFormat == D3D9Format::A8R8G8B8
+        || BackBufferFormat == D3D9Format::X8R8G8B8
+        || BackBufferFormat == D3D9Format::A1R5G5B5
+        || BackBufferFormat == D3D9Format::X1R5G5B5
+        || BackBufferFormat == D3D9Format::R5G6B5;
   }
 
 }

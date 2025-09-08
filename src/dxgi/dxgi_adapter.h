@@ -75,6 +75,9 @@ namespace dxvk {
     HRESULT STDMETHODCALLTYPE GetDesc2(
             DXGI_ADAPTER_DESC2*       pDesc) final;
     
+    HRESULT STDMETHODCALLTYPE GetDesc3(
+            DXGI_ADAPTER_DESC3*       pDesc) final;
+
     HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(
             UINT                          NodeIndex,
             DXGI_MEMORY_SEGMENT_GROUP     MemorySegmentGroup,
@@ -111,6 +114,26 @@ namespace dxvk {
     
     UINT              m_index;
     UINT64            m_memReservation[2] = { 0, 0 };
+
+    std::mutex                        m_mutex;
+    std::condition_variable           m_cond;
+
+    DWORD                             m_eventCookie = 0;
+    std::unordered_map<DWORD, HANDLE> m_eventMap;
+    dxvk::thread                      m_eventThread;
+
+    void runEventThread();
+    
+    struct MonitorEnumInfo {
+      UINT      iMonitorId;
+      HMONITOR  oMonitor;
+    };
+    
+    static BOOL CALLBACK MonitorEnumProc(
+            HMONITOR                  hmon,
+            HDC                       hdc,
+            LPRECT                    rect,
+            LPARAM                    lp);
     
   };
 

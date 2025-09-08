@@ -83,8 +83,9 @@ namespace dxvk {
   
   
   struct DxbcXreg {
-    uint32_t ccount = 0;
-    uint32_t varId  = 0;
+    uint32_t ccount  = 0;
+    uint32_t alength = 0;
+    uint32_t varId   = 0;
   };
   
   
@@ -834,7 +835,14 @@ namespace dxvk {
             double                  xy,
             double                  zw,
       const DxbcRegMask&            writeMask);
+
+    DxbcRegisterValue emitBuildVector(
+            DxbcRegisterValue       scalar,
+            uint32_t                count);
     
+    DxbcRegisterValue emitBuildZeroVector(
+            DxbcVectorType          type);
+
     /////////////////////////////////////////
     // Generic register manipulation methods
     DxbcRegisterValue emitRegisterBitcast(
@@ -1165,6 +1173,8 @@ namespace dxvk {
     
     uint32_t emitSamplePosArray();
     
+    void emitFloatControl();
+    
     ///////////////////////////////
     // Variable definition methods
     uint32_t emitNewVariable(
@@ -1220,6 +1230,10 @@ namespace dxvk {
     
     bool isDoubleType(
             DxbcScalarType type) const;
+    
+    DxbcRegisterPointer getIndexableTempPtr(
+      const DxbcRegister&           operand,
+            DxbcRegisterValue       vectorId);
     
     ///////////////////////////
     // Type definition methods

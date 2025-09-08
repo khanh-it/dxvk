@@ -17,10 +17,11 @@ namespace dxvk {
                     ? D3D9Format::D32
                     : D3D9Format::X8R8G8B8;
 
-    m_mapping = pDevice->LookupFormat(m_desc.Format);
+    for (uint32_t i = 0; i < m_updateDirtyBoxes.size(); i++) {
+      AddUpdateDirtyBox(nullptr, i);
+    }
 
-    auto pxSize      = m_mapping.ConversionFormatInfo.MacroPixelSize;
-    m_adjustedExtent = VkExtent3D{ m_desc.Width / pxSize.width, m_desc.Height / pxSize.height, m_desc.Depth };
+    m_mapping = pDevice->LookupFormat(m_desc.Format);
 
     m_mapMode = DetermineMapMode();
     m_shadow  = DetermineShadowState();
@@ -55,6 +56,11 @@ namespace dxvk {
 
     if (m_mapMode == D3D9_COMMON_TEXTURE_MAP_MODE_SYSTEMMEM)
       CreateBuffers();
+
+    m_exposedMipLevels = m_desc.MipLevels;
+
+    if (m_desc.Usage & D3DUSAGE_AUTOGENMIPMAP)
+      m_exposedMipLevels = 1;
   }
 
 
@@ -127,10 +133,12 @@ namespace dxvk {
     
     // Use the maximum possible mip level count if the supplied
     // mip level count is either unspecified (0) or invalid
-    const uint32_t maxMipLevelCount =
-        (pDesc->MultiSample <= D3DMULTISAMPLE_NONMASKABLE && !(pDesc->Usage & D3DUSAGE_AUTOGENMIPMAP))
+    const uint32_t maxMipLevelCount = pDesc->MultiSample <= D3DMULTISAMPLE_NONMASKABLE
       ? util::computeMipLevelCount({ pDesc->Width, pDesc->Height, pDesc->Depth })
       : 1u;
+
+    if (pDesc->Usage & D3DUSAGE_AUTOGENMIPMAP)
+      pDesc->MipLevels = 0;
     
     if (pDesc->MipLevels == 0 || pDesc->MipLevels > maxMipLevelCount)
       pDesc->MipLevels = maxMipLevelCount;
@@ -153,7 +161,7 @@ namespace dxvk {
                 | VK_ACCESS_TRANSFER_WRITE_BIT;
 
     if (m_mapping.ConversionFormatInfo.FormatType != D3D9ConversionFormat_None) {
-      info.usage  |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+      info.usage  |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
       info.stages |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     }
 
@@ -178,12 +186,15 @@ namespace dxvk {
       : m_device->UnsupportedFormatInfo(m_desc.Format);
 
     const VkExtent3D mipExtent = util::computeMipLevelExtent(
-      m_adjustedExtent, MipLevel);
+      GetExtent(), MipLevel);
     
     const VkExtent3D blockCount = util::computeBlockCount(
       mipExtent, formatInfo.blockSize);
 
-    return formatInfo.elementSize
+    const uint32_t planeCount = m_mapping.ConversionFormatInfo.PlaneCount;
+
+    return std::min(planeCount, 2u)
+         * formatInfo.elementSize
          * blockCount.width
          * blockCount.height
          * blockCount.depth;
@@ -193,8 +204,8 @@ namespace dxvk {
   Rc<DxvkImage> D3D9CommonTexture::CreatePrimaryImage(D3DRESOURCETYPE ResourceType, bool TryOffscreenRT) const {
     DxvkImageCreateInfo imageInfo;
     imageInfo.type            = GetImageTypeFromResourceType(ResourceType);
-    imageInfo.format          = m_mapping.ConversionFormatInfo.VulkanFormat != VK_FORMAT_UNDEFINED
-                              ? m_mapping.ConversionFormatInfo.VulkanFormat
+    imageInfo.format          = m_mapping.ConversionFormatInfo.FormatColor != VK_FORMAT_UNDEFINED
+                              ? m_mapping.ConversionFormatInfo.FormatColor
                               : m_mapping.FormatColor;
     imageInfo.flags           = 0;
     imageInfo.sampleCount     = VK_SAMPLE_COUNT_1_BIT;
@@ -213,6 +224,7 @@ namespace dxvk {
                               | VK_ACCESS_SHADER_READ_BIT;
     imageInfo.tiling          = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.layout          = VK_IMAGE_LAYOUT_GENERAL;
+    imageInfo.shared          = m_desc.IsBackBuffer;
 
     if (m_mapping.ConversionFormatInfo.FormatType != D3D9ConversionFormat_None) {
       imageInfo.usage  |= VK_IMAGE_USAGE_STORAGE_BIT;
@@ -389,7 +401,7 @@ namespace dxvk {
   }
 
 
-  VkImageLayout D3D9CommonTexture::OptimizeLayout(VkImageUsageFlags Usage) {
+  VkImageLayout D3D9CommonTexture::OptimizeLayout(VkImageUsageFlags Usage) const {
     const VkImageUsageFlags usageFlags = Usage;
     
     // Filter out unnecessary flags. Transfer operations
@@ -397,6 +409,11 @@ namespace dxvk {
     Usage &= ~(VK_IMAGE_USAGE_TRANSFER_DST_BIT
              | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     
+    // Ignore sampled bit in case the image was created with
+    // an image flag that only allows attachment usage
+    if (m_desc.IsAttachmentOnly)
+      Usage &= ~VK_IMAGE_USAGE_SAMPLED_BIT;
+
     // If the image is used only as an attachment, we never
     // have to transform the image back to a different layout
     if (Usage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
@@ -427,7 +444,9 @@ namespace dxvk {
           VkImageUsageFlags      UsageFlags,
           bool                   Srgb) {
     DxvkImageViewCreateInfo viewInfo;
-    viewInfo.format    = PickSRGB(m_mapping.FormatColor, m_mapping.FormatSrgb, Srgb);
+    viewInfo.format    = m_mapping.ConversionFormatInfo.FormatColor != VK_FORMAT_UNDEFINED
+                       ? PickSRGB(m_mapping.ConversionFormatInfo.FormatColor, m_mapping.ConversionFormatInfo.FormatSrgb, Srgb)
+                       : PickSRGB(m_mapping.FormatColor, m_mapping.FormatSrgb, Srgb);
     viewInfo.aspect    = imageFormatInfo(viewInfo.format)->aspectMask;
     viewInfo.swizzle   = m_mapping.Swizzle;
     viewInfo.usage     = UsageFlags;
@@ -453,6 +472,31 @@ namespace dxvk {
 
     // Create the underlying image view object
     return m_device->GetDXVKDevice()->createImageView(GetImage(), viewInfo);
+  }
+
+
+  void D3D9CommonTexture::PreLoadAll() {
+    if (!IsManaged())
+      return;
+
+    auto lock = m_device->LockDevice();
+    m_device->UploadManagedTexture(this);
+    m_device->MarkTextureUploaded(this);
+  }
+
+
+  void D3D9CommonTexture::PreLoadSubresource(UINT Subresource) {
+    if (IsManaged()) {
+      auto lock = m_device->LockDevice();
+
+      if (GetNeedsUpload(Subresource)) {
+        m_device->FlushImage(this, Subresource);
+        SetNeedsUpload(Subresource, false);
+
+        if (!NeedsAnyUpload())
+          m_device->MarkTextureUploaded(this);
+      }
+    }
   }
 
 

@@ -13,7 +13,7 @@ namespace dxvk {
           D3D11Device*            pParent,
     const Rc<DxvkDevice>&         Device,
           DxvkCsChunkFlags        CsFlags)
-  : m_parent    (pParent),
+  : D3D11DeviceChild<ID3D11DeviceContext4>(pParent),
     m_contextExt(this),
     m_annotation(this),
     m_multithread(this, false),
@@ -133,11 +133,12 @@ namespace dxvk {
           sr.baseMipLevel + mip, sr.baseArrayLayer + layer, mipCount));
       }
     }
-  }
 
-
-  void STDMETHODCALLTYPE D3D11DeviceContext::GetDevice(ID3D11Device **ppDevice) {
-    *ppDevice = ref(m_parent);
+    // Since we don't handle SRVs here, we can assume that the
+    // view covers all aspects of the underlying resource.
+    EmitCs([cView = view] (DxvkContext* ctx) {
+      ctx->discardImageView(cView, cView->formatInfo()->aspectMask);
+    });
   }
   
   
@@ -269,23 +270,6 @@ namespace dxvk {
 
     if (pPredicate && !std::exchange(s_errorShown, true))
       Logger::err("D3D11DeviceContext::SetPredication: Stub");
-
-    // TODO: Figure out why this breaks Watch Dogs and crashes War Thunder
-    // if (!m_device->features().extConditionalRendering.conditionalRendering)
-    //   return;
-
-    // EmitCs([
-    //   cPredicate = Com<D3D11Query, false>(predicate),
-    //   cValue     = PredicateValue
-    // ] (DxvkContext* ctx) {
-    //   DxvkBufferSlice predSlice;
-
-    //   if (cPredicate != nullptr)
-    //     predSlice = cPredicate->GetPredicate(ctx);
-      
-    //   ctx->setPredicate(predSlice,
-    //     cValue ? VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT : 0);
-    // });
   }
   
   
@@ -328,6 +312,9 @@ namespace dxvk {
     const D3D11_BOX*                        pSrcBox,
           UINT                              CopyFlags) {
     D3D10DeviceLock lock = LockContext();
+
+    if (!pDstResource || !pSrcResource)
+      return;
 
     D3D11_RESOURCE_DIMENSION dstResourceDim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     D3D11_RESOURCE_DIMENSION srcResourceDim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
@@ -964,6 +951,9 @@ namespace dxvk {
           UINT                              NumRects) {
     D3D10DeviceLock lock = LockContext();
 
+    if (NumRects && !pRect)
+      return;
+
     // ID3D11View has no methods to query the exact type of
     // the view, so we'll have to check each possible class
     auto dsv = dynamic_cast<D3D11DepthStencilView*>(pView);
@@ -1014,14 +1004,21 @@ namespace dxvk {
     VkImageAspectFlags  clearAspect = formatInfo->aspectMask & (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT);
 
     // Clear all the rectangles that are specified
-    for (uint32_t i = 0; i < NumRects; i++) {
-      if (pRect[i].left >= pRect[i].right
-       || pRect[i].top >= pRect[i].bottom)
-        continue;
+    for (uint32_t i = 0; i < NumRects || i < 1; i++) {
+      if (pRect) {
+        if (pRect[i].left >= pRect[i].right
+        || pRect[i].top >= pRect[i].bottom)
+          continue;
+      }
       
       if (bufView != nullptr) {
-        VkDeviceSize offset = pRect[i].left;
-        VkDeviceSize length = pRect[i].right - pRect[i].left;
+        VkDeviceSize offset = 0;
+        VkDeviceSize length = bufView->info().rangeLength / formatInfo->elementSize;
+
+        if (pRect) {
+          offset = pRect[i].left;
+          length = pRect[i].right - pRect[i].left;
+        }
 
         EmitCs([
           cBufferView   = bufView,
@@ -1038,10 +1035,15 @@ namespace dxvk {
       }
 
       if (imgView != nullptr) {
-        VkOffset3D offset = { pRect[i].left, pRect[i].top, 0 };
-        VkExtent3D extent = { 
-          uint32_t(pRect[i].right - pRect[i].left),
-          uint32_t(pRect[i].bottom - pRect[i].top), 1 };
+        VkOffset3D offset = { 0, 0, 0 };
+        VkExtent3D extent = imgView->mipLevelExtent(0);
+
+        if (pRect) {
+          offset = { pRect[i].left, pRect[i].top, 0 };
+          extent = {
+            uint32_t(pRect[i].right - pRect[i].left),
+            uint32_t(pRect[i].bottom - pRect[i].top), 1 };
+        }
         
         EmitCs([
           cImageView    = imgView,
@@ -1050,46 +1052,25 @@ namespace dxvk {
           cClearAspect  = clearAspect,
           cClearValue   = clearValue
         ] (DxvkContext* ctx) {
-          ctx->clearImageView(
-            cImageView,
-            cAreaOffset,
-            cAreaExtent,
-            cClearAspect,
-            cClearValue);
-        });
-      }
-    }
+          const VkImageUsageFlags rtUsage =
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    // The rect array is optional, so if it is not
-    // specified, we'll have to clear the entire view
-    if (pRect == nullptr) {
-      if (bufView != nullptr) {
-        EmitCs([
-          cBufferView   = bufView,
-          cClearValue   = clearValue,
-          cElementSize  = formatInfo->elementSize
-        ] (DxvkContext* ctx) {
-          ctx->clearBufferView(cBufferView,
-            cBufferView->info().rangeOffset / cElementSize,
-            cBufferView->info().rangeLength / cElementSize,
-            cClearValue.color);
-        });
-      }
+          bool isFullSize = cImageView->mipLevelExtent(0) == cAreaExtent;
 
-      if (imgView != nullptr) {
-        EmitCs([
-          cImageView    = imgView,
-          cClearAspect  = clearAspect,
-          cClearValue   = clearValue
-        ] (DxvkContext* ctx) {
-          VkOffset3D offset = { 0, 0, 0 };
-          VkExtent3D extent = cImageView->mipLevelExtent(0);
-
-          ctx->clearImageView(
-            cImageView,
-            offset, extent,
-            cClearAspect,
-            cClearValue);
+          if ((cImageView->info().usage & rtUsage) && isFullSize) {
+            ctx->clearRenderTarget(
+              cImageView,
+              cClearAspect,
+              cClearValue);
+          } else {
+            ctx->clearImageView(
+              cImageView,
+              cAreaOffset,
+              cAreaExtent,
+              cClearAspect,
+              cClearValue);
+          }
         });
       }
     }
@@ -1111,7 +1092,7 @@ namespace dxvk {
 
     EmitCs([cDstImageView = view->GetImageView()]
     (DxvkContext* ctx) {
-      ctx->generateMipmaps(cDstImageView);
+      ctx->generateMipmaps(cDstImageView, VK_FILTER_LINEAR);
     });
   }
   
@@ -1173,10 +1154,13 @@ namespace dxvk {
           : D3D11_MAP_WRITE_DISCARD;
 
         D3D11_MAPPED_SUBRESOURCE mappedSr;
-        Map(pDstResource, 0, mapType, 0, &mappedSr);
-        std::memcpy(reinterpret_cast<char*>(mappedSr.pData) + offset, pSrcData, size);
-        Unmap(pDstResource, 0);
-      } else {
+        if (likely(useMap = SUCCEEDED(Map(pDstResource, 0, mapType, 0, &mappedSr)))) {
+          std::memcpy(reinterpret_cast<char*>(mappedSr.pData) + offset, pSrcData, size);
+          Unmap(pDstResource, 0);
+        }
+      }
+
+      if (!useMap) {
         DxvkDataSlice dataSlice = AllocUpdateBufferSlice(size);
         std::memcpy(dataSlice.ptr(), pSrcData, size);
         
@@ -1481,6 +1465,7 @@ namespace dxvk {
           UINT            StartIndexLocation,
           INT             BaseVertexLocation) {
     D3D10DeviceLock lock = LockContext();
+    StartIndexLocation += m_state.ia.indexBuffer.firstIndex;
     
     EmitCs([=] (DxvkContext* ctx) {
       ctx->drawIndexed(
@@ -1515,6 +1500,7 @@ namespace dxvk {
           INT             BaseVertexLocation,
           UINT            StartInstanceLocation) {
     D3D10DeviceLock lock = LockContext();
+    StartIndexLocation += m_state.ia.indexBuffer.firstIndex;
     
     EmitCs([=] (DxvkContext* ctx) {
       ctx->drawIndexed(
@@ -1535,25 +1521,25 @@ namespace dxvk {
     
     // If possible, batch up multiple indirect draw calls of
     // the same type into one single multiDrawIndirect call
-    constexpr VkDeviceSize stride = sizeof(VkDrawIndexedIndirectCommand);
     auto cmdData = static_cast<D3D11CmdDrawIndirectData*>(m_cmdData);
-
-    bool useMultiDraw = cmdData && cmdData->type == D3D11CmdType::DrawIndirectIndexed
-      && cmdData->offset + cmdData->count * stride == AlignedByteOffsetForArgs
-      && m_device->features().core.features.multiDrawIndirect;
+    auto stride = 0u;
     
-    if (useMultiDraw) {
+    if (cmdData && cmdData->type == D3D11CmdType::DrawIndirectIndexed)
+      stride = GetIndirectCommandStride(cmdData, AlignedByteOffsetForArgs, sizeof(VkDrawIndexedIndirectCommand));
+    
+    if (stride) {
       cmdData->count += 1;
+      cmdData->stride = stride;
     } else {
       cmdData = EmitCsCmd<D3D11CmdDrawIndirectData>(
         [] (DxvkContext* ctx, const D3D11CmdDrawIndirectData* data) {
-          ctx->drawIndexedIndirect(data->offset, data->count,
-            sizeof(VkDrawIndexedIndirectCommand));
+          ctx->drawIndexedIndirect(data->offset, data->count, data->stride);
         });
       
       cmdData->type   = D3D11CmdType::DrawIndirectIndexed;
       cmdData->offset = AlignedByteOffsetForArgs;
       cmdData->count  = 1;
+      cmdData->stride = 0;
     }
   }
   
@@ -1566,25 +1552,25 @@ namespace dxvk {
 
     // If possible, batch up multiple indirect draw calls of
     // the same type into one single multiDrawIndirect call
-    constexpr VkDeviceSize stride = sizeof(VkDrawIndirectCommand);
     auto cmdData = static_cast<D3D11CmdDrawIndirectData*>(m_cmdData);
-
-    bool useMultiDraw = cmdData && cmdData->type == D3D11CmdType::DrawIndirect
-      && cmdData->offset + cmdData->count * stride == AlignedByteOffsetForArgs
-      && m_device->features().core.features.multiDrawIndirect;
+    auto stride = 0u;
     
-    if (useMultiDraw) {
+    if (cmdData && cmdData->type == D3D11CmdType::DrawIndirect)
+      stride = GetIndirectCommandStride(cmdData, AlignedByteOffsetForArgs, sizeof(VkDrawIndirectCommand));
+    
+    if (stride) {
       cmdData->count += 1;
+      cmdData->stride = stride;
     } else {
       cmdData = EmitCsCmd<D3D11CmdDrawIndirectData>(
         [] (DxvkContext* ctx, const D3D11CmdDrawIndirectData* data) {
-          ctx->drawIndirect(data->offset, data->count,
-            sizeof(VkDrawIndirectCommand));
+          ctx->drawIndirect(data->offset, data->count, data->stride);
         });
       
       cmdData->type   = D3D11CmdType::DrawIndirect;
       cmdData->offset = AlignedByteOffsetForArgs;
       cmdData->count  = 1;
+      cmdData->stride = 0;
     }
   }
   
@@ -1689,6 +1675,12 @@ namespace dxvk {
     if (needsUpdate)
       m_state.ia.indexBuffer.buffer = newBuffer;
 
+    if (likely(m_state.ia.indexBuffer.optimized)) {
+      uint32_t shift = Format == DXGI_FORMAT_R16_UINT ? 1 : 2;
+      m_state.ia.indexBuffer.firstIndex = Offset >> shift;
+      Offset = 0;
+    }
+
     needsUpdate |= m_state.ia.indexBuffer.offset != Offset
                 || m_state.ia.indexBuffer.format != Format;
 
@@ -1748,8 +1740,12 @@ namespace dxvk {
     if (pFormat != nullptr)
       *pFormat = m_state.ia.indexBuffer.format;
     
-    if (pOffset != nullptr)
-      *pOffset = m_state.ia.indexBuffer.offset;
+    if (pOffset != nullptr) {
+      uint32_t shift = m_state.ia.indexBuffer.format == DXGI_FORMAT_R16_UINT ? 1 : 2;
+      *pOffset = m_state.ia.indexBuffer.optimized
+        ? m_state.ia.indexBuffer.firstIndex << shift
+        : m_state.ia.indexBuffer.offset;
+    }
   }
   
   
@@ -2978,8 +2974,11 @@ namespace dxvk {
           UINT*                             pNumViewports,
           D3D11_VIEWPORT*                   pViewports) {
     D3D10DeviceLock lock = LockContext();
-    
-    if (pViewports != nullptr) {
+    uint32_t numWritten = m_state.rs.numViewports;
+
+    if (pViewports) {
+      numWritten = std::min(numWritten, *pNumViewports);
+
       for (uint32_t i = 0; i < *pNumViewports; i++) {
         if (i < m_state.rs.numViewports) {
           pViewports[i] = m_state.rs.viewports[i];
@@ -2992,9 +2991,9 @@ namespace dxvk {
           pViewports[i].MaxDepth = 0.0f;
         }
       }
-    } else {
-      *pNumViewports = m_state.rs.numViewports;
     }
+
+    *pNumViewports = numWritten;
   }
   
   
@@ -3002,8 +3001,11 @@ namespace dxvk {
           UINT*                             pNumRects,
           D3D11_RECT*                       pRects) {
     D3D10DeviceLock lock = LockContext();
+    uint32_t numWritten = m_state.rs.numScissors;
     
-    if (pRects != nullptr) {
+    if (pRects) {
+      numWritten = std::min(numWritten, *pNumRects);
+
       for (uint32_t i = 0; i < *pNumRects; i++) {
         if (i < m_state.rs.numScissors) {
           pRects[i] = m_state.rs.scissors[i];
@@ -3014,9 +3016,9 @@ namespace dxvk {
           pRects[i].bottom = 0;
         }
       }
-    } else {
-      *pNumRects = m_state.rs.numScissors;
     }
+
+    *pNumRects = m_state.rs.numScissors;
   }
 
 
@@ -3399,7 +3401,13 @@ namespace dxvk {
 
   void D3D11DeviceContext::BindFramebuffer() {
     DxvkRenderTargets attachments;
-    
+
+    // Re-enable index buffer optimization here. Some games will
+    // use indirect draws for actual scene rendering, but then
+    // use direct draws for things like the user interface.
+    if (!m_state.ia.indexBuffer.optimized)
+      SetIndexBufferOptimized(true);
+
     // D3D11 doesn't have the concept of a framebuffer object,
     // so we'll just create a new one every time the render
     // target bindings are updated. Set up the attachments.
@@ -3503,18 +3511,6 @@ namespace dxvk {
 
   void D3D11DeviceContext::BindConstantBuffer(
           UINT                              Slot,
-          D3D11Buffer*                      pBuffer) {
-    EmitCs([
-      cSlotId      = Slot,
-      cBufferSlice = pBuffer ? pBuffer->GetBufferSlice() : DxvkBufferSlice()
-    ] (DxvkContext* ctx) {
-      ctx->bindResourceBuffer(cSlotId, cBufferSlice);
-    });
-  }
-  
-  
-  void D3D11DeviceContext::BindConstantBuffer1(
-          UINT                              Slot,
           D3D11Buffer*                      pBuffer,
           UINT                              Offset,
           UINT                              Length) {
@@ -3606,11 +3602,38 @@ namespace dxvk {
   }
 
 
+  void D3D11DeviceContext::SetIndexBufferOptimized(
+          BOOL                              Enable) {
+    uint32_t shift = m_state.ia.indexBuffer.format == DXGI_FORMAT_R16_UINT ? 1 : 2;
+
+    if (Enable) {
+      m_state.ia.indexBuffer.firstIndex = m_state.ia.indexBuffer.offset >> shift;
+      m_state.ia.indexBuffer.offset = 0;
+    } else {
+      m_state.ia.indexBuffer.offset += m_state.ia.indexBuffer.firstIndex << shift;
+      m_state.ia.indexBuffer.firstIndex = 0;
+    }
+
+    m_state.ia.indexBuffer.optimized = Enable;
+
+    BindIndexBuffer(
+      m_state.ia.indexBuffer.buffer.ptr(),
+      m_state.ia.indexBuffer.offset,
+      m_state.ia.indexBuffer.format);
+  }
+
+
   void D3D11DeviceContext::SetDrawBuffers(
           ID3D11Buffer*                     pBufferForArgs,
           ID3D11Buffer*                     pBufferForCount) {
     auto argBuffer = static_cast<D3D11Buffer*>(pBufferForArgs);
     auto cntBuffer = static_cast<D3D11Buffer*>(pBufferForCount);
+
+    // Bind index buffer with the actual offset since otherwise the
+    // first index members of the indirect draw structures would be
+    // incorrect.
+    if (unlikely(m_state.ia.indexBuffer.optimized))
+      SetIndexBufferOptimized(false);
 
     if (m_state.id.argBuffer != argBuffer
      || m_state.id.cntBuffer != cntBuffer) {
@@ -3633,19 +3656,19 @@ namespace dxvk {
     for (uint32_t i = 0; i < NumBuffers; i++) {
       auto newBuffer = static_cast<D3D11Buffer*>(ppConstantBuffers[i]);
       
-      UINT constantBound = 0;
+      UINT constantCount = 0;
       
       if (likely(newBuffer != nullptr))
-        constantBound = newBuffer->Desc()->ByteWidth / 16;
+        constantCount = std::min(newBuffer->Desc()->ByteWidth / 16, UINT(D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT));
       
       if (Bindings[StartSlot + i].buffer         != newBuffer
-       || Bindings[StartSlot + i].constantBound  != constantBound) {
+       || Bindings[StartSlot + i].constantCount  != constantCount) {
         Bindings[StartSlot + i].buffer         = newBuffer;
         Bindings[StartSlot + i].constantOffset = 0;
-        Bindings[StartSlot + i].constantCount  = constantBound;
-        Bindings[StartSlot + i].constantBound  = constantBound;
+        Bindings[StartSlot + i].constantCount  = constantCount;
+        Bindings[StartSlot + i].constantBound  = constantCount;
         
-        BindConstantBuffer(slotId + i, newBuffer);
+        BindConstantBuffer(slotId + i, newBuffer, 0, constantCount);
       }
     }
   }
@@ -3669,14 +3692,18 @@ namespace dxvk {
       UINT constantBound;
 
       if (likely(newBuffer != nullptr)) {
-        constantBound = newBuffer->Desc()->ByteWidth / 16;
+        UINT bufferConstantsCount = newBuffer->Desc()->ByteWidth / 16;
+        constantBound = std::min(bufferConstantsCount, UINT(D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT));
 
         if (likely(pFirstConstant && pNumConstants)) {
           constantOffset  = pFirstConstant[i];
           constantCount   = pNumConstants [i];
 
-          constantBound = (constantOffset + constantCount > constantBound)
-            ? constantBound - std::min(constantOffset, constantBound)
+          if (unlikely(constantCount > D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT))
+            continue;
+
+          constantBound = (constantOffset + constantCount > bufferConstantsCount)
+            ? bufferConstantsCount - std::min(constantOffset, bufferConstantsCount)
             : constantCount;
         } else {
           constantOffset  = 0;
@@ -3701,7 +3728,7 @@ namespace dxvk {
         Bindings[StartSlot + i].constantCount  = constantCount;
         Bindings[StartSlot + i].constantBound  = constantBound;
         
-        BindConstantBuffer1(slotId + i, newBuffer, constantOffset, constantBound);
+        BindConstantBuffer(slotId + i, newBuffer, constantOffset, constantBound);
       }
     }
   }
@@ -3816,9 +3843,6 @@ namespace dxvk {
       auto scissor  = VkRect2D();
 
       ctx->setViewports(1, &viewport, &scissor);
-
-      // Reset predication
-      ctx->setPredicate(DxvkBufferSlice(), 0);
 
       // Unbind indirect draw buffer
       ctx->bindDrawBuffers(DxvkBufferSlice(), DxvkBufferSlice());
@@ -3942,7 +3966,7 @@ namespace dxvk {
     uint32_t slotId = computeConstantBufferBinding(Stage, 0);
     
     for (uint32_t i = 0; i < Bindings.size(); i++) {
-      BindConstantBuffer1(slotId + i, Bindings[i].buffer.ptr(),
+      BindConstantBuffer(slotId + i, Bindings[i].buffer.ptr(),
         Bindings[i].constantOffset, Bindings[i].constantBound);
     }
   }

@@ -14,11 +14,13 @@ namespace dxvk {
     this->relaxedBarriers       = config.getOption<bool>("d3d11.relaxedBarriers", false);
     this->maxTessFactor         = config.getOption<int32_t>("d3d11.maxTessFactor", 0);
     this->samplerAnisotropy     = config.getOption<int32_t>("d3d11.samplerAnisotropy", -1);
-    this->invariantPosition     = config.getOption<bool>("d3d11.invariantPosition", false);
+    this->invariantPosition     = config.getOption<bool>("d3d11.invariantPosition", true);
+    this->floatControls         = config.getOption<bool>("d3d11.floatControls", true);
     this->deferSurfaceCreation  = config.getOption<bool>("dxgi.deferSurfaceCreation", false);
     this->numBackBuffers        = config.getOption<int32_t>("dxgi.numBackBuffers", 0);
     this->maxFrameLatency       = config.getOption<int32_t>("dxgi.maxFrameLatency", 0);
     this->syncInterval          = config.getOption<int32_t>("dxgi.syncInterval", -1);
+    this->tearFree              = config.getOption<Tristate>("dxgi.tearFree", Tristate::Auto);
 
     this->constantBufferRangeCheck = config.getOption<bool>("d3d11.constantBufferRangeCheck", false)
       && DxvkGpuVendor(devInfo.core.properties.vendorID) != DxvkGpuVendor::Amd;

@@ -654,9 +654,9 @@ namespace dxvk {
     // Restore window position and apply the style
     const RECT rect = m_windowState.rect;
     
-    ::SetWindowPos(m_window, 0,
+    ::SetWindowPos(m_window, (m_windowState.exstyle & WS_EX_TOPMOST) ? HWND_TOPMOST : HWND_NOTOPMOST,
       rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-      SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+      SWP_FRAMECHANGED | SWP_NOACTIVATE);
     
     return S_OK;
   }
@@ -690,7 +690,22 @@ namespace dxvk {
       return hr;
     }
     
-    return SetMonitorDisplayMode(outputDesc.Monitor, &selectedMode);
+    DEVMODEW devMode = { };
+    devMode.dmSize       = sizeof(devMode);
+    devMode.dmFields     = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+    devMode.dmPelsWidth  = selectedMode.Width;
+    devMode.dmPelsHeight = selectedMode.Height;
+    devMode.dmBitsPerPel = GetMonitorFormatBpp(selectedMode.Format);
+    
+    if (selectedMode.RefreshRate.Numerator != 0)  {
+      devMode.dmFields |= DM_DISPLAYFREQUENCY;
+      devMode.dmDisplayFrequency = selectedMode.RefreshRate.Numerator
+                                 / selectedMode.RefreshRate.Denominator;
+    }
+
+    return SetMonitorDisplayMode(outputDesc.Monitor, &devMode)
+      ? S_OK
+      : DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
   }
   
   
@@ -698,16 +713,9 @@ namespace dxvk {
     if (!hMonitor)
       return DXGI_ERROR_INVALID_CALL;
     
-    // Restore registry settings
-    DXGI_MODE_DESC mode;
-    
-    HRESULT hr = GetMonitorDisplayMode(
-      hMonitor, ENUM_REGISTRY_SETTINGS, &mode);
-    
-    if (FAILED(hr))
-      return hr;
-    
-    return SetMonitorDisplayMode(hMonitor, &mode);
+    return RestoreMonitorDisplayMode(hMonitor)
+      ? S_OK
+      : DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
   }
   
   

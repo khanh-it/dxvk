@@ -474,18 +474,18 @@ namespace dxvk {
       const Rc<DxvkBuffer>&       buffer);
     
     /**
-     * \brief Discards image subresources
+     * \brief Discards contents of an image view
      * 
      * Discards the current contents of the image
      * and performs a fast layout transition. This
      * may improve performance in some cases.
-     * \param [in] image The image to discard
-     * \param [in] subresources Image subresources
+     * \param [in] imageView View to discard
+     * \param [in] discardAspects Image aspects to discard
      */
-    void discardImage(
-      const Rc<DxvkImage>&          image,
-            VkImageSubresourceRange subresources);
-    
+    void discardImageView(
+      const Rc<DxvkImageView>&      imageView,
+            VkImageAspectFlags      discardAspects);
+
     /**
      * \brief Starts compute jobs
      * 
@@ -624,9 +624,11 @@ namespace dxvk {
      * Uses blitting to generate lower mip levels from
      * the top-most mip level passed to this method.
      * \param [in] imageView The image to generate mips for
+     * \param [in] filter The filter to use for generation
      */
     void generateMipmaps(
-      const Rc<DxvkImageView>&        imageView);
+      const Rc<DxvkImageView>&        imageView,
+            VkFilter                  filter);
     
     /**
      * \brief Initializes or invalidates an image
@@ -935,21 +937,6 @@ namespace dxvk {
             uint32_t            value);
     
     /**
-     * \brief Sets predicate
-     *
-     * Enables or disables conditional rendering,
-     * depending on whether the given buffer slice
-     * is defined or not. Draw calls and render
-     * target clear commands will get discarded if
-     * the predicate value is either zero or non-zero.
-     * \param [in] predicate The predicate buffer
-     * \param [in] flags Conditional rendering mode
-     */
-    void setPredicate(
-      const DxvkBufferSlice&    predicate,
-            VkConditionalRenderingFlagsEXT flags);
-    
-    /**
      * \brief Sets barrier control flags
      *
      * Barrier control flags can be used to control
@@ -965,18 +952,6 @@ namespace dxvk {
      */
     void signalGpuEvent(
       const Rc<DxvkGpuEvent>&   event);
-    
-    /**
-     * \brief Copies query data to predicate buffer
-     * 
-     * The given buffer slice can then be passed
-     * to \c setPredicate to enable predication.
-     * \param [in] predicate Predicate buffer
-     * \param [in] query Source query
-     */
-    void writePredicate(
-      const DxvkBufferSlice&    predicate,
-      const Rc<DxvkGpuQuery>&   query);
     
     /**
      * \brief Writes to a timestamp query
@@ -1014,9 +989,11 @@ namespace dxvk {
     
     Rc<DxvkCommandList>     m_cmd;
     Rc<DxvkDescriptorPool>  m_descPool;
+    Rc<DxvkBuffer>          m_zeroBuffer;
 
     DxvkContextFlags        m_flags;
     DxvkContextState        m_state;
+    DxvkContextFeatures     m_features;
 
     DxvkBarrierSet          m_sdmaAcquires;
     DxvkBarrierSet          m_sdmaBarriers;
@@ -1029,6 +1006,8 @@ namespace dxvk {
     DxvkGpuQueryManager     m_queryManager;
     DxvkStagingDataAlloc    m_staging;
     
+    DxvkRenderTargetLayouts m_rtLayouts = { };
+
     VkPipeline m_gpActivePipeline = VK_NULL_HANDLE;
     VkPipeline m_cpActivePipeline = VK_NULL_HANDLE;
 
@@ -1038,15 +1017,12 @@ namespace dxvk {
     DxvkBindingSet<MaxNumVertexBindings + 1>  m_vbTracked;
     DxvkBindingSet<MaxNumResourceSlots>       m_rcTracked;
 
+    std::vector<DxvkDeferredClear> m_deferredClears;
+
     std::array<DxvkShaderResourceSlot, MaxNumResourceSlots>  m_rc;
     std::array<DxvkGraphicsPipeline*, 4096> m_gpLookupCache = { };
     std::array<DxvkComputePipeline*,   256> m_cpLookupCache = { };
 
-    std::unordered_map<
-      DxvkBufferSliceHandle,
-      DxvkGpuQueryHandle,
-      DxvkHash, DxvkEq>     m_predicateWrites;
-    
     void blitImageFb(
       const Rc<DxvkImage>&        dstImage,
       const Rc<DxvkImage>&        srcImage,
@@ -1111,15 +1087,27 @@ namespace dxvk {
             VkResolveModeFlagBitsKHR  depthMode,
             VkResolveModeFlagBitsKHR  stencilMode);
     
-    void updatePredicate(
-      const DxvkBufferSliceHandle&    predicate,
-      const DxvkGpuQueryHandle&       query);
-    
-    void commitPredicateUpdates();
-    
+    void performClear(
+      const Rc<DxvkImageView>&        imageView,
+            int32_t                   attachmentIndex,
+            VkImageAspectFlags        discardAspects,
+            VkImageAspectFlags        clearAspects,
+            VkClearValue              clearValue);
+
+    void deferClear(
+      const Rc<DxvkImageView>&        imageView,
+            VkImageAspectFlags        clearAspects,
+            VkClearValue              clearValue);
+
+    void deferDiscard(
+      const Rc<DxvkImageView>&        imageView,
+            VkImageAspectFlags        discardAspects);
+
+    void flushClears(
+            bool                      useRenderPass);
+
     void startRenderPass();
-    void spillRenderPass();
-    void clearRenderPass();
+    void spillRenderPass(bool suspend);
     
     void renderPassBindFramebuffer(
       const Rc<DxvkFramebuffer>&  framebuffer,
@@ -1133,9 +1121,6 @@ namespace dxvk {
       const DxvkRenderTargets&    renderTargets,
             DxvkRenderPassOps&    renderPassOps);
 
-    void startConditionalRendering();
-    void pauseConditionalRendering();
-    
     void startTransformFeedback();
     void pauseTransformFeedback();
     
@@ -1161,14 +1146,40 @@ namespace dxvk {
 
     void updateFramebuffer();
     
-    void updateIndexBufferBinding();
+    void applyRenderTargetLoadLayouts();
+
+    void applyRenderTargetStoreLayouts();
+
+    void transitionRenderTargetLayouts(
+            DxvkBarrierSet&         barriers,
+            bool                    sharedOnly);
+
+    void transitionColorAttachment(
+            DxvkBarrierSet&         barriers,
+      const DxvkAttachment&         attachment,
+            VkImageLayout           oldLayout);
+
+    void transitionDepthAttachment(
+            DxvkBarrierSet&         barriers,
+      const DxvkAttachment&         attachment,
+            VkImageLayout           oldLayout);
+
+    void updateRenderTargetLayouts(
+      const Rc<DxvkFramebuffer>&    newFb,
+      const Rc<DxvkFramebuffer>&    oldFb);
+
+    void prepareImage(
+            DxvkBarrierSet&         barriers,
+      const Rc<DxvkImage>&          image,
+      const VkImageSubresourceRange& subresources,
+            bool                    flushClears = true);
+
+    bool updateIndexBufferBinding();
     void updateVertexBufferBindings();
 
     void updateTransformFeedbackBuffers();
     void updateTransformFeedbackState();
 
-    void updateConditionalRendering();
-    
     void updateDynamicState();
 
     template<VkPipelineBindPoint BindPoint>
@@ -1197,8 +1208,6 @@ namespace dxvk {
             VkPipelineStageFlags      stages,
             VkAccessFlags             access);
 
-    DxvkAccessFlags checkFramebufferBarrier();
-
     void emitMemoryBarrier(
             VkDependencyFlags         flags,
             VkPipelineStageFlags      srcStages,
@@ -1206,6 +1215,13 @@ namespace dxvk {
             VkPipelineStageFlags      dstStages,
             VkAccessFlags             dstAccess);
     
+    void initializeImage(
+      const Rc<DxvkImage>&            image,
+      const VkImageSubresourceRange&  subresources,
+            VkImageLayout             dstLayout,
+            VkPipelineStageFlags      dstStages,
+            VkAccessFlags             dstAccess);
+
     VkDescriptorSet allocateDescriptorSet(
             VkDescriptorSetLayout     layout);
 
@@ -1216,6 +1232,9 @@ namespace dxvk {
 
     DxvkComputePipeline* lookupComputePipeline(
       const DxvkComputePipelineShaders&   shaders);
+
+    Rc<DxvkBuffer> createZeroBuffer(
+            VkDeviceSize              size);
 
   };
   

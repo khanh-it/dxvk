@@ -65,6 +65,9 @@ namespace dxvk {
     
     uint32_t allocateId();
     
+    bool hasCapability(
+            spv::Capability         capability);
+
     void enableCapability(
             spv::Capability         capability);
     
@@ -85,6 +88,12 @@ namespace dxvk {
     void setExecutionMode(
             uint32_t                entryPointId,
             spv::ExecutionMode      executionMode);
+    
+    void setExecutionMode(
+            uint32_t                entryPointId,
+            spv::ExecutionMode      executionMode,
+            uint32_t                argCount,
+      const uint32_t*               args);
     
     void setInvocations(
             uint32_t                entryPointId,
@@ -178,6 +187,14 @@ namespace dxvk {
 
     uint32_t constbReplicant(
             bool                    replicant,
+            uint32_t                count);
+
+    uint32_t constiReplicant(
+            int32_t                 replicant,
+            uint32_t                count);
+
+    uint32_t constuReplicant(
+            int32_t                 replicant,
             uint32_t                count);
     
     uint32_t constComposite(
@@ -990,6 +1007,10 @@ namespace dxvk {
             uint32_t                resultType,
             uint32_t                operand);
     
+    uint32_t opIsInf(
+            uint32_t                resultType,
+            uint32_t                operand);
+    
     uint32_t opFunctionCall(
             uint32_t                resultType,
             uint32_t                functionId,
@@ -1020,6 +1041,10 @@ namespace dxvk {
             uint32_t                resultType,
             uint32_t                interpolant,
             uint32_t                offset);
+
+    uint32_t opImage(
+            uint32_t                resultType,
+            uint32_t                sampledImage);
     
     uint32_t opImageRead(
             uint32_t                resultType,

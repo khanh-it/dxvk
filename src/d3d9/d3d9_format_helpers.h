@@ -13,6 +13,8 @@ namespace dxvk {
 
     D3D9FormatHelper(const Rc<DxvkDevice>& device);
 
+    void Flush();
+
     void ConvertFormat(
             D3D9_CONVERSION_FORMAT_INFO   conversionFormat,
       const Rc<DxvkImage>&                dstImage,
@@ -21,11 +23,14 @@ namespace dxvk {
 
   private:
 
-    void ConvertVideoFormat(
+    void ConvertGenericFormat(
             D3D9_CONVERSION_FORMAT_INFO   videoFormat,
       const Rc<DxvkImage>&                dstImage,
             VkImageSubresourceLayers      dstSubresource,
-      const Rc<DxvkBuffer>&               srcBuffer);
+      const Rc<DxvkBuffer>&               srcBuffer,
+            VkFormat                      bufferFormat,
+            uint32_t                      specConstantValue,
+            VkExtent2D                    macroPixelRun);
 
     enum BindingIds : uint32_t {
       Image  = 0,
@@ -36,8 +41,12 @@ namespace dxvk {
 
     Rc<DxvkShader> InitShader(SpirvCodeBuffer code);
 
+    void FlushInternal();
+
     Rc<DxvkDevice>    m_device;
     Rc<DxvkContext>   m_context;
+
+    size_t            m_transferCommands = 0;
 
     std::array<Rc<DxvkShader>, D3D9ConversionFormat_Count> m_shaders;
 

@@ -3,7 +3,11 @@
 #include "../util/rc/util_rc.h"
 #include "../util/rc/util_rc_ptr.h"
 
-#include "vulkan_loader_fn.h"
+#define VK_USE_PLATFORM_WIN32_KHR 1
+#include <vulkan/vulkan.h>
+
+#define VULKAN_FN(name) \
+  ::PFN_ ## name name = reinterpret_cast<::PFN_ ## name>(sym(#name))
 
 namespace dxvk::vk {
   
@@ -302,6 +306,21 @@ namespace dxvk::vk {
     #ifdef VK_EXT_conditional_rendering
     VULKAN_FN(vkCmdBeginConditionalRenderingEXT);
     VULKAN_FN(vkCmdEndConditionalRenderingEXT);
+    #endif
+
+    #ifdef VK_EXT_extended_dynamic_state
+    VULKAN_FN(vkCmdBindVertexBuffers2EXT);
+    VULKAN_FN(vkCmdSetCullModeEXT);
+    VULKAN_FN(vkCmdSetDepthBoundsTestEnableEXT);
+    VULKAN_FN(vkCmdSetDepthCompareOpEXT);
+    VULKAN_FN(vkCmdSetDepthTestEnableEXT);
+    VULKAN_FN(vkCmdSetDepthWriteEnableEXT);
+    VULKAN_FN(vkCmdSetFrontFaceEXT);
+    VULKAN_FN(vkCmdSetPrimitiveTopologyEXT);
+    VULKAN_FN(vkCmdSetScissorWithCountEXT);
+    VULKAN_FN(vkCmdSetStencilOpEXT);
+    VULKAN_FN(vkCmdSetStencilTestEnableEXT);
+    VULKAN_FN(vkCmdSetViewportWithCountEXT);
     #endif
 
     #ifdef VK_EXT_full_screen_exclusive

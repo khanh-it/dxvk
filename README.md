@@ -4,6 +4,9 @@ A Vulkan-based translation layer for Direct3D 9/10/11 which allows running 3D ap
 
 For the current status of the project, please refer to the [project wiki](https://github.com/doitsujin/dxvk/wiki).
 
+The most recent development builds can be found [here](https://github.com/doitsujin/dxvk/actions/workflows/artifacts.yml?query=branch%3Amaster).
+
+Release builds can be found [here](https://github.com/doitsujin/dxvk/releases).
 
 ## How to use
 In order to install a DXVK package obtained from the [release](https://github.com/doitsujin/dxvk/releases) page into a given wine prefix, run the following commands from within the DXVK directory:
@@ -17,7 +20,8 @@ This will **copy** the DLLs into the `system32` and `syswow64` directories of yo
 
 The setup script optionally takes the following arguments:
 - `--symlink`: Create symbolic links to the DLL files instead of copying them. This is especially useful for development.
-- `--without-dxgi`: Do not install DXVK's DXGI implementation and use the one provided by wine instead. This is necessary for both vkd3d and DXVK to work within the same wine prefix.
+- `--with-d3d10`: Install the `d3d10{_1}.dll` helper libraries.
+- `--without-dxgi`: Do not install DXVK's DXGI implementation and use the one provided by wine instead.
 
 Verify that your application uses DXVK instead of wined3d by checking for the presence of the log file `d3d9.log` or `d3d11.log` in the application's directory, or by enabling the HUD (see notes below).
 
@@ -31,8 +35,8 @@ export WINEPREFIX=/path/to/.wine-prefix
 
 ### Requirements:
 - [wine 3.10](https://www.winehq.org/) or newer
-- [Meson](http://mesonbuild.com/) build system (at least version 0.46)
-- [MinGW64](http://mingw-w64.org/) 6.0 compiler and headers
+- [Meson](https://mesonbuild.com/) build system (at least version 0.46)
+- [Mingw-w64](http://mingw-w64.org/) compiler and headers (at least version 8.0)
 - [glslang](https://github.com/KhronosGroup/glslang) compiler
 
 ### Building DLLs
@@ -51,8 +55,6 @@ In order to preserve the build directories for development, pass `--dev-build` t
 cd /your/target/directory/build.64
 ninja install
 ```
-
-A winelib build can be created by adding the `--winelib` argument.
 
 #### Compiling manually
 ```
@@ -82,9 +84,10 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `memory`: Shows the amount of device memory allocated and used.
 - `gpuload`: Shows estimated GPU load. May be inaccurate.
 - `version`: Shows DXVK version.
-- `api`: Shows the D3D feature level used by the application. Does not work correctly for D3D10 at the moment.
+- `api`: Shows the D3D feature level used by the application.
 - `compiler`: Shows shader compiler activity
 - `samplers`: Shows the current number of sampler pairs used *[D3D9 Only]*
+- `scale=x`: Scales the HUD by a factor of `x` (e.g. `1.5`)
 
 Additionally, `DXVK_HUD=1` has the same effect as `DXVK_HUD=devinfo,fps`, and `DXVK_HUD=full` enables all available HUD elements.
 
@@ -105,16 +108,21 @@ The following environment variables can be used to control the cache:
 The following environment variables can be used for **debugging** purposes.
 - `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation` Enables Vulkan debug layers. Highly recommended for troubleshooting rendering issues and driver crashes. Requires the Vulkan SDK to be installed on the host system.
 - `DXVK_LOG_LEVEL=none|error|warn|info|debug` Controls message logging.
-- `DXVK_LOG_PATH=/some/directory` Changes path where log files are stored.
+- `DXVK_LOG_PATH=/some/directory` Changes path where log files are stored. Set to `none` to disable log file creation entirely, without disabling logging.
 - `DXVK_CONFIG_FILE=/xxx/dxvk.conf` Sets path to the configuration file.
 
 ## Troubleshooting
 DXVK requires threading support from your mingw-w64 build environment. If you
-are missing this, you may see "error: 'mutex' is not a member of 'std'". On
-Debian and Ubuntu, this can usually be resolved by using the posix alternate, which
+are missing this, you may see "error: 'mutex' is not a member of 'std'". 
+
+On Debian and Ubuntu, this can be resolved by using the posix alternate, which
 supports threading. For example, choose the posix alternate from these
 commands (use i686 for 32-bit):
 ```
 update-alternatives --config x86_64-w64-mingw32-gcc
 update-alternatives --config x86_64-w64-mingw32-g++
 ```
+For non debian based distros, make sure that your mingw-w64-gcc cross compiler 
+does have `--enable-threads=posix` enabled during configure. If your distro does
+ship its mingw-w64-gcc binary with `--enable-threads=win32` you might have to
+recompile locally or open a bug at your distro's bugtracker to ask for it. 

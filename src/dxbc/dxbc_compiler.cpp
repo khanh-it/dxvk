@@ -235,6 +235,9 @@ namespace dxvk {
       case DxbcProgramType::PixelShader:    this->emitPsFinalize(); break;
       case DxbcProgramType::ComputeShader:  this->emitCsFinalize(); break;
     }
+
+    // Emit float control mode if the extension is supported
+    this->emitFloatControl();
     
     // Declare the entry point, we now have all the
     // information we need, including the interfaces
@@ -387,6 +390,7 @@ namespace dxvk {
       m_xRegs.resize(regId + 1);
     
     m_xRegs.at(regId).ccount = info.type.ccount;
+    m_xRegs.at(regId).alength = info.type.alength;
     m_xRegs.at(regId).varId  = emitNewVariable(info);
     
     m_module.setDebugName(m_xRegs.at(regId).varId,
@@ -2054,6 +2058,14 @@ namespace dxvk {
       emitRegisterLoad(ins.src[1], srcMask),
     };
     
+    // Division by zero will return 0xffffffff for both results
+    auto bvecId = getVectorTypeId({ DxbcScalarType::Bool, srcMask.popCount() });
+
+    DxbcRegisterValue const0  = emitBuildConstVecu32( 0u,  0u,  0u,  0u, srcMask);
+    DxbcRegisterValue constff = emitBuildConstVecu32(~0u, ~0u, ~0u, ~0u, srcMask);
+
+    uint32_t cmpValue = m_module.opINotEqual(bvecId, src.at(1).id, const0.id);
+
     // Compute results only if the destination
     // operands are not NULL.
     if (ins.dst[0].type != DxbcOperandType::Null) {
@@ -2064,6 +2076,10 @@ namespace dxvk {
       quotient.id = m_module.opUDiv(
         getVectorTypeId(quotient.type),
         src.at(0).id, src.at(1).id);
+
+      quotient.id = m_module.opSelect(
+        getVectorTypeId(quotient.type),
+        cmpValue, quotient.id, constff.id);
       
       quotient = emitDstOperandModifiers(quotient, ins.modifiers);
       emitRegisterStore(ins.dst[0], quotient);
@@ -2077,6 +2093,10 @@ namespace dxvk {
       remainder.id = m_module.opUMod(
         getVectorTypeId(remainder.type),
         src.at(0).id, src.at(1).id);
+
+      remainder.id = m_module.opSelect(
+        getVectorTypeId(remainder.type),
+        cmpValue, remainder.id, constff.id);
       
       remainder = emitDstOperandModifiers(remainder, ins.modifiers);
       emitRegisterStore(ins.dst[1], remainder);
@@ -2907,16 +2927,37 @@ namespace dxvk {
           1, &zeroIndex);
       }
     }
-    
-    // Store result in the destination register
+
     DxbcRegisterValue result;
     result.type.ctype  = ins.dst[0].dataType;
     result.type.ccount = componentCount;
+
+    uint32_t typeId = getVectorTypeId(result.type);
     result.id = componentCount > 1
-      ? m_module.opCompositeConstruct(
-          getVectorTypeId(result.type),
+      ? m_module.opCompositeConstruct(typeId,
           componentCount, scalarIds.data())
       : scalarIds[0];
+
+    if (isPack) {
+      // Some drivers return infinity if the input value is above a certain
+      // threshold, but D3D wants us to return infinity only if the input is
+      // actually infinite. Fix this up to return the maximum representable
+      // 16-bit floating point number instead, but preserve input infinity.
+      uint32_t t_bvec = getVectorTypeId({ DxbcScalarType::Bool, componentCount });
+      uint32_t f16Infinity = m_module.constuReplicant(0x7C00, componentCount);
+      uint32_t f16Unsigned = m_module.constuReplicant(0x7FFF, componentCount);
+
+      uint32_t isInputInf = m_module.opIsInf(t_bvec, src.id);
+      uint32_t isValueInf = m_module.opIEqual(t_bvec, f16Infinity,
+        m_module.opBitwiseAnd(typeId, result.id, f16Unsigned));
+
+      result.id = m_module.opSelect(getVectorTypeId(result.type),
+        m_module.opLogicalAnd(t_bvec, isValueInf, m_module.opLogicalNot(t_bvec, isInputInf)),
+        m_module.opISub(typeId, result.id, m_module.constuReplicant(1, componentCount)),
+        result.id);
+    }
+
+    // Store result in the destination register
     emitRegisterStore(ins.dst[0], result);
   }
 
@@ -3179,18 +3220,16 @@ namespace dxvk {
     const DxbcRegister& samplerReg  = ins.src[2];
     
     // Texture and sampler register IDs
-    const uint32_t textureId = textureReg.idx[0].offset;
-    const uint32_t samplerId = samplerReg.idx[0].offset;
+    const auto& texture = m_textures.at(textureReg.idx[0].offset);
+    const auto& sampler = m_samplers.at(samplerReg.idx[0].offset);
     
     // Load texture coordinates
     const DxbcRegisterValue coord = emitRegisterLoad(texCoordReg,
-      DxbcRegMask::firstN(getTexLayerDim(m_textures.at(textureId).imageInfo)));
+      DxbcRegMask::firstN(getTexLayerDim(texture.imageInfo)));
     
     // Query the LOD. The result is a two-dimensional float32
     // vector containing the mip level and virtual LOD numbers.
-    const uint32_t sampledImageId = emitLoadSampledImage(
-      m_textures.at(textureId), m_samplers.at(samplerId), false);
-    
+    const uint32_t sampledImageId = emitLoadSampledImage(texture, sampler, false);
     const uint32_t queriedLodId = m_module.opImageQueryLod(
       getVectorTypeId({ DxbcScalarType::Float32, 2 }),
       sampledImageId, coord.id);
@@ -3306,11 +3345,8 @@ namespace dxvk {
     //    (src0) Source address
     //    (src1) Source texture
     //    (src2) Sample number
-    const uint32_t textureId = ins.src[1].idx[0].offset;
-    
-    // Image type, which stores the image dimensions etc.
-    const DxbcImageInfo imageType = m_textures.at(textureId).imageInfo;
-    const uint32_t imageLayerDim  = getTexLayerDim(imageType);
+    const auto& texture = m_textures.at(ins.src[1].idx[0].offset);
+    const uint32_t imageLayerDim = getTexLayerDim(texture.imageInfo);
     
     // Load the texture coordinates. The last component
     // contains the LOD if the resource is an image.
@@ -3336,7 +3372,7 @@ namespace dxvk {
     
     // The LOD is not present when reading from
     // a buffer or from a multisample texture.
-    if (imageType.dim != spv::DimBuffer && imageType.ms == 0) {
+    if (texture.imageInfo.dim != spv::DimBuffer && texture.imageInfo.ms == 0) {
       DxbcRegisterValue imageLod = emitRegisterExtract(
         address, DxbcRegMask(false, false, false, true));
       
@@ -3346,7 +3382,7 @@ namespace dxvk {
     
     // The ld2ms instruction has a sample index, but we
     // are only allowed to set it for multisample views
-    if (ins.op == DxbcOpcode::LdMs && imageType.ms == 1) {
+    if (ins.op == DxbcOpcode::LdMs && texture.imageInfo.ms == 1) {
       DxbcRegisterValue sampleId = emitRegisterLoad(
         ins.src[2], DxbcRegMask(true, false, false, false));
       
@@ -3355,25 +3391,14 @@ namespace dxvk {
     }
     
     // Extract coordinates from address
-    const DxbcRegisterValue coord = emitCalcTexCoord(address, imageType);
-    
-    // Fetch texels only if the resource is actually bound
-    const uint32_t labelMerge     = m_module.allocateId();
-    const uint32_t labelBound     = m_module.allocateId();
-    const uint32_t labelUnbound   = m_module.allocateId();
-    
-    m_module.opSelectionMerge(labelMerge, spv::SelectionControlMaskNone);
-    m_module.opBranchConditional(m_textures.at(textureId).specId, labelBound, labelUnbound);
-    m_module.opLabel(labelBound);
+    const DxbcRegisterValue coord = emitCalcTexCoord(address, texture.imageInfo);
     
     // Reading a typed image or buffer view
     // always returns a four-component vector.
-    const uint32_t imageId = m_module.opLoad(
-      m_textures.at(textureId).imageTypeId,
-      m_textures.at(textureId).varId);
+    const uint32_t imageId = m_module.opLoad(texture.imageTypeId, texture.varId);
     
     DxbcRegisterValue result;
-    result.type.ctype  = m_textures.at(textureId).sampledType;
+    result.type.ctype  = texture.sampledType;
     result.type.ccount = 4;
     result.id = m_module.opImageFetch(
       getVectorTypeId(result.type), imageId,
@@ -3385,32 +3410,15 @@ namespace dxvk {
       ins.src[1].swizzle, ins.dst[0].mask);
     
     // If the texture is not bound, return zeroes
-    m_module.opBranch(labelMerge);
-    m_module.opLabel(labelUnbound);
-    
-    DxbcRegisterValue zeroes = [&] {
-      switch (result.type.ctype) {
-        case DxbcScalarType::Float32: return emitBuildConstVecf32(0.0f, 0.0f, 0.0f, 0.0f, ins.dst[0].mask);
-        case DxbcScalarType::Uint32:  return emitBuildConstVecu32(0u, 0u, 0u, 0u,         ins.dst[0].mask);
-        case DxbcScalarType::Sint32:  return emitBuildConstVeci32(0, 0, 0, 0,             ins.dst[0].mask);
-        default: throw DxvkError("DxbcCompiler: Invalid scalar type");
-      }
-    }();
-    
-    m_module.opBranch(labelMerge);
-    m_module.opLabel(labelMerge);
-    
-    // Merge the result with a phi function
-    const std::array<SpirvPhiLabel, 2> phiLabels = {{
-      { result.id, labelBound   },
-      { zeroes.id, labelUnbound },
-    }};
+    DxbcRegisterValue bound;
+    bound.type = { DxbcScalarType::Bool, 1 };
+    bound.id = texture.specId;
     
     DxbcRegisterValue mergedResult;
     mergedResult.type = result.type;
-    mergedResult.id = m_module.opPhi(
-      getVectorTypeId(mergedResult.type),
-      phiLabels.size(), phiLabels.data());
+    mergedResult.id = m_module.opSelect(getVectorTypeId(mergedResult.type),
+      emitBuildVector(bound, result.type.ccount).id, result.id,
+      emitBuildZeroVector(result.type).id);
     
     emitRegisterStore(ins.dst[0], mergedResult);
   }
@@ -3436,16 +3444,15 @@ namespace dxvk {
     const DxbcRegister& samplerReg  = ins.src[2 + isExtendedGather];
     
     // Texture and sampler register IDs
-    const uint32_t textureId = textureReg.idx[0].offset;
-    const uint32_t samplerId = samplerReg.idx[0].offset;
+    const auto& texture = m_textures.at(textureReg.idx[0].offset);
+    const auto& sampler = m_samplers.at(samplerReg.idx[0].offset);
     
     // Image type, which stores the image dimensions etc.
-    const DxbcImageInfo imageType = m_textures.at(textureId).imageInfo;
-    const uint32_t imageLayerDim = getTexLayerDim(imageType);
+    const uint32_t imageLayerDim = getTexLayerDim(texture.imageInfo);
     
     // Load the texture coordinates. SPIR-V allows these
     // to be float4 even if not all components are used.
-    DxbcRegisterValue coord = emitLoadTexCoord(texCoordReg, imageType);
+    DxbcRegisterValue coord = emitLoadTexCoord(texCoordReg, texture.imageInfo);
     
     // Load reference value for depth-compare operations
     const bool isDepthCompare = ins.op == DxbcOpcode::Gather4C
@@ -3455,11 +3462,6 @@ namespace dxvk {
       ? emitRegisterLoad(ins.src[3 + isExtendedGather],
           DxbcRegMask(true, false, false, false))
       : DxbcRegisterValue();
-    
-    // Determine the sampled image type based on the opcode.
-    const uint32_t sampledImageType = isDepthCompare
-      ? m_module.defSampledImageType(m_textures.at(textureId).depthTypeId)
-      : m_module.defSampledImageType(m_textures.at(textureId).colorTypeId);
     
     // Accumulate additional image operands.
     SpirvImageOperands imageOperands;
@@ -3485,20 +3487,12 @@ namespace dxvk {
         imageLayerDim, offsetIds.data());
     }
     
-    // Combine the texture and the sampler into a sampled image
-    const uint32_t sampledImageId = m_module.opSampledImage(
-      sampledImageType,
-      m_module.opLoad(
-        m_textures.at(textureId).imageTypeId,
-        m_textures.at(textureId).varId),
-      m_module.opLoad(
-        m_samplers.at(samplerId).typeId,
-        m_samplers.at(samplerId).varId));
-    
     // Gathering texels always returns a four-component
     // vector, even for the depth-compare variants.
+    uint32_t sampledImageId = emitLoadSampledImage(texture, sampler, isDepthCompare);
+
     DxbcRegisterValue result;
-    result.type.ctype  = m_textures.at(textureId).sampledType;
+    result.type.ctype  = texture.sampledType;
     result.type.ccount = 4;
     
     switch (ins.op) {
@@ -3531,6 +3525,14 @@ namespace dxvk {
     result = emitRegisterSwizzle(result,
       textureReg.swizzle, ins.dst[0].mask);
     
+    DxbcRegisterValue bound;
+    bound.type = { DxbcScalarType::Bool, 1 };
+    bound.id = texture.specId;
+    
+    result.id = m_module.opSelect(getVectorTypeId(result.type),
+      emitBuildVector(bound, result.type.ccount).id, result.id,
+      emitBuildZeroVector(result.type).id);
+
     emitRegisterStore(ins.dst[0], result);
   }
   
@@ -3546,16 +3548,13 @@ namespace dxvk {
     const DxbcRegister& samplerReg  = ins.src[2];
     
     // Texture and sampler register IDs
-    const uint32_t textureId = textureReg.idx[0].offset;
-    const uint32_t samplerId = samplerReg.idx[0].offset;
-    
-    // Image type, which stores the image dimensions etc.
-    const DxbcImageInfo imageType = m_textures.at(textureId).imageInfo;
-    const uint32_t imageLayerDim  = getTexLayerDim(imageType);
+    const auto& texture = m_textures.at(textureReg.idx[0].offset);
+    const auto& sampler = m_samplers.at(samplerReg.idx[0].offset);
+    const uint32_t imageLayerDim = getTexLayerDim(texture.imageInfo);
     
     // Load the texture coordinates. SPIR-V allows these
     // to be float4 even if not all components are used.
-    DxbcRegisterValue coord = emitLoadTexCoord(texCoordReg, imageType);
+    DxbcRegisterValue coord = emitLoadTexCoord(texCoordReg, texture.imageInfo);
     
     // Load reference value for depth-compare operations
     const bool isDepthCompare = ins.op == DxbcOpcode::SampleC
@@ -3602,14 +3601,12 @@ namespace dxvk {
     }
     
     // Combine the texture and the sampler into a sampled image
-    const uint32_t sampledImageId = emitLoadSampledImage(
-      m_textures.at(textureId), m_samplers.at(samplerId),
-      isDepthCompare);
+    uint32_t sampledImageId = emitLoadSampledImage(texture, sampler, isDepthCompare);
     
     // Sampling an image always returns a four-component
     // vector, whereas depth-compare ops return a scalar.
     DxbcRegisterValue result;
-    result.type.ctype  = m_textures.at(textureId).sampledType;
+    result.type.ctype  = texture.sampledType;
     result.type.ccount = isDepthCompare ? 1 : 4;
     
     switch (ins.op) {
@@ -3683,6 +3680,14 @@ namespace dxvk {
         textureReg.swizzle, ins.dst[0].mask);
     }
     
+    DxbcRegisterValue bound;
+    bound.type = { DxbcScalarType::Bool, 1 };
+    bound.id = texture.specId;
+    
+    result.id = m_module.opSelect(getVectorTypeId(result.type),
+      emitBuildVector(bound, result.type.ccount).id, result.id,
+      emitBuildZeroVector(result.type).id);
+
     emitRegisterStore(ins.dst[0], result);
   }
   
@@ -4395,6 +4400,42 @@ namespace dxvk {
   }
   
   
+  DxbcRegisterValue DxbcCompiler::emitBuildVector(
+          DxbcRegisterValue       scalar,
+          uint32_t                count) {
+    if (count == 1)
+      return scalar;
+
+    std::array<uint32_t, 4> scalarIds =
+      { scalar.id, scalar.id, scalar.id, scalar.id };
+
+    DxbcRegisterValue result;
+    result.type.ctype = scalar.type.ctype;
+    result.type.ccount = count;
+    result.id = m_module.constComposite(
+      getVectorTypeId(result.type),
+      count, scalarIds.data());
+    return result;
+  }
+
+
+  DxbcRegisterValue DxbcCompiler::emitBuildZeroVector(
+          DxbcVectorType          type) {
+    DxbcRegisterValue result;
+    result.type.ctype = type.ctype;
+    result.type.ccount = 1;
+
+    switch (type.ctype) {
+      case DxbcScalarType::Float32: result.id = m_module.constf32(0.0f); break;
+      case DxbcScalarType::Uint32:  result.id = m_module.constu32(0u); break;
+      case DxbcScalarType::Sint32:  result.id = m_module.consti32(0); break;
+      default: throw DxvkError("DxbcCompiler: Invalid scalar type");
+    }
+
+    return emitBuildVector(result, type.ccount);
+  }
+
+
   DxbcRegisterValue DxbcCompiler::emitRegisterBitcast(
           DxbcRegisterValue       srcValue,
           DxbcScalarType          dstType) {
@@ -4558,7 +4599,9 @@ namespace dxvk {
     
     switch (value.type.ctype) {
       case DxbcScalarType::Float32: value.id = m_module.opFAbs(typeId, value.id); break;
+      case DxbcScalarType::Float64: value.id = m_module.opFAbs(typeId, value.id); break;
       case DxbcScalarType::Sint32:  value.id = m_module.opSAbs(typeId, value.id); break;
+      case DxbcScalarType::Sint64:  value.id = m_module.opSAbs(typeId, value.id); break;
       default: Logger::warn("DxbcCompiler: Cannot get absolute value for given type");
     }
     
@@ -4631,15 +4674,22 @@ namespace dxvk {
           DxbcOpModifiers         modifiers) {
     const uint32_t typeId = getVectorTypeId(value.type);
     
-    if (value.type.ctype == DxbcScalarType::Float32) {
-      // Saturating only makes sense on floats
-      if (modifiers.saturate) {
-        const DxbcRegMask       mask = DxbcRegMask::firstN(value.type.ccount);
-        const DxbcRegisterValue vec0 = emitBuildConstVecf32(0.0f, 0.0f, 0.0f, 0.0f, mask);
-        const DxbcRegisterValue vec1 = emitBuildConstVecf32(1.0f, 1.0f, 1.0f, 1.0f, mask);
-        
-        value.id = m_module.opNClamp(typeId, value.id, vec0.id, vec1.id);
+    if (modifiers.saturate) {
+      DxbcRegMask mask;
+      DxbcRegisterValue vec0, vec1;
+
+      if (value.type.ctype == DxbcScalarType::Float32) {
+        mask = DxbcRegMask::firstN(value.type.ccount);
+        vec0 = emitBuildConstVecf32(0.0f, 0.0f, 0.0f, 0.0f, mask);
+        vec1 = emitBuildConstVecf32(1.0f, 1.0f, 1.0f, 1.0f, mask);
+      } else if (value.type.ctype == DxbcScalarType::Float64) {
+        mask = DxbcRegMask::firstN(value.type.ccount * 2);
+        vec0 = emitBuildConstVecf64(0.0, 0.0, mask);
+        vec1 = emitBuildConstVecf64(1.0, 1.0, mask);
       }
+
+      if (mask)
+        value.id = m_module.opNClamp(typeId, value.id, vec0.id, vec1.id);
     }
     
     return value;
@@ -4708,28 +4758,7 @@ namespace dxvk {
   
   DxbcRegisterPointer DxbcCompiler::emitGetIndexableTempPtr(
     const DxbcRegister&           operand) {
-    // x# regs are indexed as follows:
-    //    (0) register index (immediate)
-    //    (1) element index (relative)
-    const uint32_t regId = operand.idx[0].offset;
-    
-    const DxbcRegisterValue vectorId
-      = emitIndexLoad(operand.idx[1]);
-    
-    DxbcRegisterInfo info;
-    info.type.ctype   = DxbcScalarType::Float32;
-    info.type.ccount  = m_xRegs[regId].ccount;
-    info.type.alength = 0;
-    info.sclass       = spv::StorageClassPrivate;
-    
-    DxbcRegisterPointer result;
-    result.type.ctype  = info.type.ctype;
-    result.type.ccount = info.type.ccount;
-    result.id = m_module.opAccessChain(
-      getPointerTypeId(info),
-      m_xRegs.at(regId).varId,
-      1, &vectorId.id);
-    return result;
+    return getIndexableTempPtr(operand, emitIndexLoad(operand.idx[1]));
   }
   
   
@@ -5657,7 +5686,27 @@ namespace dxvk {
   void DxbcCompiler::emitRegisterStore(
     const DxbcRegister&           reg,
           DxbcRegisterValue       value) {
-    emitValueStore(emitGetOperandPtr(reg), value, reg.mask);
+    if (reg.type == DxbcOperandType::IndexableTemp) {
+      DxbcRegisterValue vectorId = emitIndexLoad(reg.idx[1]);
+      uint32_t boundsCheck = m_module.opULessThan(
+        m_module.defBoolType(), vectorId.id,
+        m_module.constu32(m_xRegs.at(reg.idx[0].offset).alength));
+      
+      DxbcConditional cond;
+      cond.labelIf  = m_module.allocateId();
+      cond.labelEnd = m_module.allocateId();
+      
+      m_module.opSelectionMerge(cond.labelEnd, spv::SelectionControlMaskNone);
+      m_module.opBranchConditional(boundsCheck, cond.labelIf, cond.labelEnd);
+      
+      m_module.opLabel(cond.labelIf);
+      emitValueStore(getIndexableTempPtr(reg, vectorId), value, reg.mask);
+      
+      m_module.opBranch(cond.labelEnd);
+      m_module.opLabel (cond.labelEnd);
+    } else {
+      emitValueStore(emitGetOperandPtr(reg), value, reg.mask);
+    }
   }
   
   
@@ -5829,16 +5878,15 @@ namespace dxvk {
       uint32_t specTypeId = getScalarTypeId(DxbcScalarType::Uint32);
       uint32_t compTypeId = getScalarTypeId(vector.type.ctype);
       
+      uint32_t specId = m_module.specConst32(specTypeId, 0x3210);
+      m_module.decorateSpecId(specId, uint32_t(DxvkSpecConstantId::ColorComponentMappings) + i);
+      m_module.setDebugName(specId, str::format("omap", i).c_str());
+
       std::array<uint32_t, 4> scalars;
-
       for (uint32_t c = 0; c < vector.type.ccount; c++) {
-        const char* components = "rgba";
-
-        uint32_t specId = m_module.specConst32(specTypeId, c);
-        m_module.decorateSpecId(specId, uint32_t(DxvkSpecConstantId::ColorComponentMappings) + 4 * i + c);
-        m_module.setDebugName(specId, str::format("omap", i, ".", components[c]).c_str());
-
-        scalars[c] = m_module.opVectorExtractDynamic(compTypeId, vector.id, specId);
+        scalars[c] = m_module.opVectorExtractDynamic(compTypeId, vector.id,
+          m_module.opBitFieldUExtract(specTypeId, specId,
+            m_module.constu32(4 * c), m_module.constu32(4)));
       }
 
       uint32_t typeId = getVectorTypeId(vector.type);
@@ -7395,7 +7443,42 @@ namespace dxvk {
     return varId;
   }
   
-  
+
+  void DxbcCompiler::emitFloatControl() {
+    DxbcFloatControlFlags flags = m_moduleInfo.options.floatControl;
+
+    if (flags.isClear())
+      return;
+
+    const uint32_t width32 = 32;
+    const uint32_t width64 = 64;
+
+    m_module.enableExtension("SPV_KHR_float_controls");
+
+    if (flags.test(DxbcFloatControlFlag::DenormFlushToZero32)) {
+      m_module.enableCapability(spv::CapabilityDenormFlushToZero);
+      m_module.setExecutionMode(m_entryPointId, spv::ExecutionModeDenormFlushToZero, 1, &width32);
+    }
+
+    if (flags.test(DxbcFloatControlFlag::PreserveNan32)) {
+      m_module.enableCapability(spv::CapabilitySignedZeroInfNanPreserve);
+      m_module.setExecutionMode(m_entryPointId, spv::ExecutionModeSignedZeroInfNanPreserve, 1, &width32);
+    }
+
+    if (m_module.hasCapability(spv::CapabilityFloat64)) {
+      if (flags.test(DxbcFloatControlFlag::DenormPreserve64)) {
+        m_module.enableCapability(spv::CapabilityDenormPreserve);
+        m_module.setExecutionMode(m_entryPointId, spv::ExecutionModeDenormPreserve, 1, &width64);
+      }
+
+      if (flags.test(DxbcFloatControlFlag::PreserveNan64)) {
+        m_module.enableCapability(spv::CapabilitySignedZeroInfNanPreserve);
+        m_module.setExecutionMode(m_entryPointId, spv::ExecutionModeSignedZeroInfNanPreserve, 1, &width64);
+      }
+    }
+  }
+
+
   uint32_t DxbcCompiler::emitNewVariable(const DxbcRegisterInfo& info) {
     const uint32_t ptrTypeId = this->getPointerTypeId(info);
     return m_module.newVar(ptrTypeId, info.sclass);
@@ -7477,28 +7560,32 @@ namespace dxvk {
     
     switch (reg.type) {
       case DxbcOperandType::Resource: {
+        const auto& texture = m_textures.at(registerId);
+
         DxbcBufferInfo result;
-        result.image  = m_textures.at(registerId).imageInfo;
-        result.stype  = m_textures.at(registerId).sampledType;
-        result.type   = m_textures.at(registerId).type;
-        result.typeId = m_textures.at(registerId).imageTypeId;
-        result.varId  = m_textures.at(registerId).varId;
-        result.specId = m_textures.at(registerId).specId;
-        result.stride = m_textures.at(registerId).structStride;
-        result.align  = m_textures.at(registerId).structAlign;
+        result.image  = texture.imageInfo;
+        result.stype  = texture.sampledType;
+        result.type   = texture.type;
+        result.typeId = texture.imageTypeId;
+        result.varId  = texture.varId;
+        result.specId = texture.specId;
+        result.stride = texture.structStride;
+        result.align  = texture.structAlign;
         return result;
       } break;
         
       case DxbcOperandType::UnorderedAccessView: {
+        const auto& uav = m_uavs.at(registerId);
+
         DxbcBufferInfo result;
-        result.image  = m_uavs.at(registerId).imageInfo;
-        result.stype  = m_uavs.at(registerId).sampledType;
-        result.type   = m_uavs.at(registerId).type;
-        result.typeId = m_uavs.at(registerId).imageTypeId;
-        result.varId  = m_uavs.at(registerId).varId;
-        result.specId = m_uavs.at(registerId).specId;
-        result.stride = m_uavs.at(registerId).structStride;
-        result.align  = m_uavs.at(registerId).structAlign;
+        result.image  = uav.imageInfo;
+        result.stype  = uav.sampledType;
+        result.type   = uav.type;
+        result.typeId = uav.imageTypeId;
+        result.varId  = uav.varId;
+        result.specId = uav.specId;
+        result.stride = uav.structStride;
+        result.align  = uav.structAlign;
         return result;
       } break;
         
@@ -7670,6 +7757,30 @@ namespace dxvk {
         || type == DxbcScalarType::Float64;
   }
 
+  DxbcRegisterPointer DxbcCompiler::getIndexableTempPtr(
+    const DxbcRegister&           operand,
+          DxbcRegisterValue       vectorId) {
+    // x# regs are indexed as follows:
+    //    (0) register index (immediate)
+    //    (1) element index (relative)
+    const uint32_t regId = operand.idx[0].offset;
+    
+    DxbcRegisterInfo info;
+    info.type.ctype   = DxbcScalarType::Float32;
+    info.type.ccount  = m_xRegs[regId].ccount;
+    info.type.alength = 0;
+    info.sclass       = spv::StorageClassPrivate;
+    
+    DxbcRegisterPointer result;
+    result.type.ctype  = info.type.ctype;
+    result.type.ccount = info.type.ccount;
+    result.id = m_module.opAccessChain(
+      getPointerTypeId(info),
+      m_xRegs.at(regId).varId,
+      1, &vectorId.id);
+
+    return result;
+  }
 
   uint32_t DxbcCompiler::getScalarTypeId(DxbcScalarType type) {
     if (type == DxbcScalarType::Float64)
