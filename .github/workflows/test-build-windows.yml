@@ -1,6 +1,6 @@
 name: Test Builds on Windows
 
-on: [push, pull_request, workflow_dispatch]
+on: [workflow_dispatch]
 
 jobs:
   build-set-windows:
@@ -39,7 +39,7 @@ jobs:
         Invoke-WebRequest -URI https://raw.githubusercontent.com/NovaRain/DXSDK_Collection/master/DXSDK_Aug2007/Include/d3d8.h -OutFile include/d3d8.h
         Invoke-WebRequest -URI https://raw.githubusercontent.com/NovaRain/DXSDK_Collection/master/DXSDK_Aug2007/Include/d3d8types.h -OutFile include/d3d8types.h
         Invoke-WebRequest -URI https://raw.githubusercontent.com/NovaRain/DXSDK_Collection/master/DXSDK_Aug2007/Include/d3d8caps.h -OutFile include/d3d8caps.h
-        
+
     - name: Get version
       id: get-version
       shell: bash
