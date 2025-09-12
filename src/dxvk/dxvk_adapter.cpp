@@ -306,21 +306,21 @@ namespace dxvk {
     DxvkNameList extensionNameList = extensionsEnabled.toNameList();
 
     // Always enable robust buffer access
-    enabledFeatures.core.features.robustBufferAccess = VK_TRUE;
+    enabledFeatures.core.features.robustBufferAccess = m_deviceFeatures.core.features.robustBufferAccess;
 
     // Enable variable multisample rate if supported
     enabledFeatures.core.features.variableMultisampleRate =
       m_deviceFeatures.core.features.variableMultisampleRate;
 
     // Always enable memory model so client APIs can use it
-    enabledFeatures.vk12.vulkanMemoryModel = VK_TRUE;
+    enabledFeatures.vk12.vulkanMemoryModel = m_deviceFeatures.vk12.vulkanMemoryModel;
 
     // Optionally used by some client API extensions
     enabledFeatures.vk12.drawIndirectCount =
       m_deviceFeatures.vk12.drawIndirectCount;
 
     // Required since we no longer have a fallback for GPU queries
-    enabledFeatures.vk12.hostQueryReset = VK_TRUE;
+    enabledFeatures.vk12.hostQueryReset = m_deviceFeatures.vk12.hostQueryReset;
 
     // Used by some internal shaders, and can be used by applications
     enabledFeatures.vk12.shaderOutputViewportIndex =
@@ -329,7 +329,7 @@ namespace dxvk {
       m_deviceFeatures.vk12.shaderOutputLayer;
 
     // Required for proper GPU synchronization
-    enabledFeatures.vk12.timelineSemaphore = VK_TRUE;
+    enabledFeatures.vk12.timelineSemaphore = m_deviceFeatures.vk12.timelineSemaphore;
 
     // Only enable the base image robustness feature if robustness 2 isn't
     // supported, since this is only a subset of what we actually want.
@@ -343,8 +343,8 @@ namespace dxvk {
       m_deviceFeatures.vk13.pipelineCreationCacheControl;
 
     // Core features that we're relying on in various places
-    enabledFeatures.vk13.synchronization2 = VK_TRUE;
-    enabledFeatures.vk13.dynamicRendering = VK_TRUE;
+    enabledFeatures.vk13.synchronization2 = m_deviceFeatures.vk13.synchronization2;
+    enabledFeatures.vk13.dynamicRendering = m_deviceFeatures.vk13.dynamicRendering;
 
     // Maintenance4 may cause performance problems on amdvlk in some cases
     if (m_deviceInfo.vk12.driverID != VK_DRIVER_ID_AMD_OPEN_SOURCE
@@ -390,9 +390,9 @@ namespace dxvk {
     // Require robustBufferAccess2 since we use the robustness alignment
     // info in a number of places, and require null descriptor support
     // since we no longer have a fallback for those in the backend
-    enabledFeatures.extRobustness2.robustBufferAccess2 = VK_TRUE;
+    enabledFeatures.extRobustness2.robustBufferAccess2 = m_deviceFeatures.extRobustness2.robustBufferAccess2;
     enabledFeatures.extRobustness2.robustImageAccess2 = m_deviceFeatures.extRobustness2.robustImageAccess2;
-    enabledFeatures.extRobustness2.nullDescriptor = VK_TRUE;
+    enabledFeatures.extRobustness2.nullDescriptor = m_deviceFeatures.extRobustness2.nullDescriptor;
 
     // We use this to avoid decompressing SPIR-V shaders in some situations
     enabledFeatures.extShaderModuleIdentifier.shaderModuleIdentifier =
