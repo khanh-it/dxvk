@@ -1882,35 +1882,35 @@ namespace dxvk {
     DxvkDeviceFeatures enabled   = {};
 
     // Required for feature level 10_1
-    enabled.core.features.depthBiasClamp                          = VK_TRUE;
-    enabled.core.features.depthClamp                              = VK_TRUE;
-    enabled.core.features.dualSrcBlend                            = VK_TRUE;
-    enabled.core.features.fillModeNonSolid                        = VK_TRUE;
-    enabled.core.features.fullDrawIndexUint32                     = VK_TRUE;
-    enabled.core.features.geometryShader                          = VK_TRUE;
-    enabled.core.features.imageCubeArray                          = VK_TRUE;
-    enabled.core.features.independentBlend                        = VK_TRUE;
-    enabled.core.features.multiViewport                           = VK_TRUE;
-    enabled.core.features.occlusionQueryPrecise                   = VK_TRUE;
+    enabled.core.features.depthBiasClamp                          = supported.core.features.depthBiasClamp;
+    enabled.core.features.depthClamp                              = supported.core.features.depthClamp;
+    enabled.core.features.dualSrcBlend                            = supported.core.features.dualSrcBlend;
+    enabled.core.features.fillModeNonSolid                        = supported.core.features.fillModeNonSolid;
+    enabled.core.features.fullDrawIndexUint32                     = supported.core.features.fullDrawIndexUint32;
+    enabled.core.features.geometryShader                          = supported.core.features.geometryShader;
+    enabled.core.features.imageCubeArray                          = supported.core.features.imageCubeArray;
+    enabled.core.features.independentBlend                        = supported.core.features.independentBlend;
+    enabled.core.features.multiViewport                           = supported.core.features.multiViewport;
+    enabled.core.features.occlusionQueryPrecise                   = supported.core.features.occlusionQueryPrecise;
     enabled.core.features.pipelineStatisticsQuery                 = supported.core.features.pipelineStatisticsQuery;
-    enabled.core.features.sampleRateShading                       = VK_TRUE;
+    enabled.core.features.sampleRateShading                       = supported.core.features.sampleRateShading;
     enabled.core.features.samplerAnisotropy                       = supported.core.features.samplerAnisotropy;
-    enabled.core.features.shaderClipDistance                      = VK_TRUE;
-    enabled.core.features.shaderCullDistance                      = VK_TRUE;
-    enabled.core.features.shaderImageGatherExtended               = VK_TRUE;
-    enabled.core.features.textureCompressionBC                    = VK_TRUE;
+    enabled.core.features.shaderClipDistance                      = supported.core.features.shaderClipDistance;
+    enabled.core.features.shaderCullDistance                      = supported.core.features.shaderCullDistance;
+    enabled.core.features.shaderImageGatherExtended               = supported.core.features.shaderImageGatherExtended;
+    enabled.core.features.textureCompressionBC                    = supported.core.features.textureCompressionBC;
 
-    enabled.vk11.shaderDrawParameters                             = VK_TRUE;
+    enabled.vk11.shaderDrawParameters                             = supported.vk11.shaderDrawParameters;
 
-    enabled.vk12.samplerMirrorClampToEdge                         = VK_TRUE;
+    enabled.vk12.samplerMirrorClampToEdge                         = supported.vk12.samplerMirrorClampToEdge;
 
-    enabled.vk13.shaderDemoteToHelperInvocation                   = VK_TRUE;
+    enabled.vk13.shaderDemoteToHelperInvocation                   = supported.vk13.shaderDemoteToHelperInvocation;
 
     enabled.extCustomBorderColor.customBorderColors               = supported.extCustomBorderColor.customBorderColorWithoutFormat;
     enabled.extCustomBorderColor.customBorderColorWithoutFormat   = supported.extCustomBorderColor.customBorderColorWithoutFormat;
 
-    enabled.extTransformFeedback.transformFeedback                = VK_TRUE;
-    enabled.extTransformFeedback.geometryStreams                  = VK_TRUE;
+    enabled.extTransformFeedback.transformFeedback                = supported.extTransformFeedback.transformFeedback;
+    enabled.extTransformFeedback.geometryStreams                  = supported.extTransformFeedback.geometryStreams;
 
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor      = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateDivisor;
     enabled.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor  = supported.extVertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor;
