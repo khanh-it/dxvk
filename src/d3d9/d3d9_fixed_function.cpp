@@ -14,13 +14,15 @@
 #include <cfloat>
 
 #include <d3d9_fixed_function_vert.h>
+#include <d3d9_fixed_function_vert_noclip.h>
 #include <d3d9_fixed_function_frag.h>
 #include <d3d9_fixed_function_frag_sample.h>
 
 namespace dxvk {
 
-  D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const D3D9Options* options) {
+  D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const Rc<DxvkDevice>& device, const D3D9Options* options) {
     forceSampleRateShading = options->forceSampleRateShading;
+    enableClipDistance = device->features().core.features.shaderClipDistance;
   }
 
   uint32_t DoFixedFunctionFog(D3D9ShaderSpecConstantManager& spec, SpirvModule& spvModule, const D3D9FogContext& fogCtx) {
@@ -979,6 +981,7 @@ namespace dxvk {
     info.sharedPushData = DxvkPushDataBlock(0u, sizeof(D3D9RenderStateInfo), 4u, 0u);
     info.localPushData = m_samplerBlock;
     info.samplerHeap = DxvkShaderBinding(VK_SHADER_STAGE_ALL, GetGlobalSamplerSetIndex(), 0u);
+    info.debugName = m_filename;
 
     return new DxvkSpirvShader(info, m_module.compile());
   }
@@ -1502,7 +1505,7 @@ namespace dxvk {
     uint32_t pointSize = m_module.opFClamp(m_floatType, pointInfo.defaultValue, pointInfo.min, pointInfo.max);
     m_module.opStore(m_vs.out.POINTSIZE, pointSize);
 
-    if (m_vsKey.Data.Contents.VertexClipping)
+    if (m_vsKey.Data.Contents.VertexClipping && m_options.enableClipDistance)
       emitVsClipping(vtx);
   }
 
@@ -1763,7 +1766,8 @@ namespace dxvk {
     m_specUbo = SetupSpecUBO(m_module, m_bindings);
 
     // VS Caps
-    m_module.enableCapability(spv::CapabilityClipDistance);
+    if (m_options.enableClipDistance)
+      m_module.enableCapability(spv::CapabilityClipDistance);
 
     emitLightTypeDecl();
     emitBaseBufferDecl();
@@ -2703,7 +2707,7 @@ namespace dxvk {
     D3D9FFShaderCompiler compiler(
       pDevice->GetDXVKDevice(),
       Key, name,
-      pDevice->GetOptions());
+      D3D9FixedFunctionOptions(pDevice->GetDXVKDevice(), pDevice->GetOptions()));
 
     m_shader = compiler.compile();
 
@@ -2724,7 +2728,7 @@ namespace dxvk {
     D3D9FFShaderCompiler compiler(
       pDevice->GetDXVKDevice(),
       Key, name,
-      pDevice->GetOptions());
+      D3D9FixedFunctionOptions(pDevice->GetDXVKDevice(), pDevice->GetOptions()));
 
     m_shader = compiler.compile();
 
@@ -2739,6 +2743,9 @@ namespace dxvk {
           D3D9ShaderType        ShaderType) {
 
     bool isVS = ShaderType == D3D9ShaderType::VertexShader;
+    D3D9FixedFunctionOptions options(
+      pDevice->GetDXVKDevice(),
+      pDevice->GetOptions());
 
     if (isVS) {
       std::array<DxvkBindingInfo, 4> bindings;
@@ -2794,7 +2801,9 @@ namespace dxvk {
       info.samplerHeap = DxvkShaderBinding();
       info.debugName = "FF VS";
 
-      m_shader = new DxvkSpirvShader(info, d3d9_fixed_function_vert);
+      m_shader = options.enableClipDistance
+        ? new DxvkSpirvShader(info, d3d9_fixed_function_vert)
+        : new DxvkSpirvShader(info, d3d9_fixed_function_vert_noclip);
     } else {
       std::vector<DxvkBindingInfo> bindings;
 

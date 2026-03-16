@@ -20,7 +20,8 @@ namespace dxvk {
     const DxsoProgramInfo&    programInfo,
     const DxsoAnalysisInfo&   analysis,
     const D3D9ConstantLayout& layout)
-    : m_moduleInfo ( moduleInfo )
+    : m_fileName   ( fileName )
+    , m_moduleInfo ( moduleInfo )
     , m_programInfo( programInfo )
     , m_analysis   ( &analysis )
     , m_layout     ( &layout )
@@ -230,6 +231,7 @@ namespace dxvk {
     info.sharedPushData = DxvkPushDataBlock(0u, sizeof(D3D9RenderStateInfo), 4u, 0u);
     info.localPushData = m_samplerPushData;
     info.samplerHeap = DxvkShaderBinding(VK_SHADER_STAGE_ALL, GetGlobalSamplerSetIndex(), 0u);
+    info.debugName = m_fileName;
 
     if (m_programInfo.type() == DxsoProgramTypes::PixelShader)
       info.flatShadingInputs = m_ps.flatShadingMask;
@@ -451,7 +453,8 @@ namespace dxvk {
 
 
   void DxsoCompiler::emitVsInit() {
-    m_module.enableCapability(spv::CapabilityClipDistance);
+    if (m_moduleInfo.options.enableClipDistance)
+      m_module.enableCapability(spv::CapabilityClipDistance);
 
     // Only VS needs this, because PS has
     // non-indexable specialized output regs
@@ -3726,7 +3729,8 @@ void DxsoCompiler::emitControlFlowGenericLoop(
       m_vs.functionId, 0, nullptr);
     this->emitLinkerOutputSetup();
 
-    this->emitVsClipping();
+    if (m_moduleInfo.options.enableClipDistance)
+      this->emitVsClipping();
 
     this->emitFunctionEnd();
   }
