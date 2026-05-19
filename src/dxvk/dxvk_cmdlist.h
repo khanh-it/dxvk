@@ -46,8 +46,15 @@ namespace dxvk {
    * One semaphore for each queue.
    */
   struct DxvkTimelineSemaphores {
+    bool use_timeline = true;
+    
     VkSemaphore graphics = VK_NULL_HANDLE;
     VkSemaphore transfer = VK_NULL_HANDLE;
+
+    VkSemaphore bind  = VK_NULL_HANDLE;
+    VkSemaphore post  = VK_NULL_HANDLE;
+    VkSemaphore sdma  = VK_NULL_HANDLE;
+    VkFence     fence = VK_NULL_HANDLE;
   };
 
 
@@ -131,7 +138,8 @@ namespace dxvk {
     VkResult submit(
             DxvkDevice*           device,
             VkQueue               queue,
-            uint64_t              frameId);
+            uint64_t              frameId,
+            VkFence               fence = VK_NULL_HANDLE);
 
     /**
      * \brief Resets object

@@ -70,6 +70,7 @@ namespace dxvk {
     DxvkPresentInfo     present;
     DxvkLatencyInfo     latency;
     DxvkTimelineSemaphoreValues timelines;
+    DxvkTimelineSemaphores      binarySync;
   };
 
 
@@ -196,9 +197,16 @@ namespace dxvk {
 
     DxvkDevice*                 m_device;
     DxvkQueueCallback           m_callback;
-
+    
+    bool                        m_useTimeline = true;
     DxvkTimelineSemaphores      m_semaphores;
     DxvkTimelineSemaphoreValues m_timelines;
+
+    dxvk::mutex                         m_binaryPoolMutex;
+    std::vector<DxvkTimelineSemaphores> m_binarySyncPool;
+
+    DxvkTimelineSemaphores allocateBinarySync();
+    void recycleBinarySync(const DxvkTimelineSemaphores& sync);
 
     std::atomic<VkResult>       m_lastError = { VK_SUCCESS };
     

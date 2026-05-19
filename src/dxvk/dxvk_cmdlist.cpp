@@ -1,6 +1,7 @@
 
 #include "dxvk_cmdlist.h"
 #include "dxvk_device.h"
+#include <vulkan/vulkan_core.h>
 
 namespace dxvk {
 
@@ -52,7 +53,8 @@ namespace dxvk {
   VkResult DxvkCommandSubmission::submit(
           DxvkDevice*           device,
           VkQueue               queue,
-          uint64_t              frameId) {
+          uint64_t              frameId,
+          VkFence               fence) {
     auto vk = device->vkd();
 
     VkLatencySubmissionPresentIdNV latencyInfo = { VK_STRUCTURE_TYPE_LATENCY_SUBMISSION_PRESENT_ID_NV };
@@ -80,8 +82,8 @@ namespace dxvk {
 
     VkResult vr = VK_SUCCESS;
 
-    if (!this->isEmpty())
-      vr = vk->vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
+    if (!this->isEmpty() || fence)
+      vr = vk->vkQueueSubmit2(queue, 1, &submitInfo, fence);
 
     this->reset();
     return vr;
@@ -258,6 +260,7 @@ namespace dxvk {
     const auto& graphics = m_device->queues().graphics;
     const auto& transfer = m_device->queues().transfer;
     const auto& sparse = m_device->queues().sparse;
+    const bool use_timeline = semaphores.use_timeline;
 
     m_commandSubmission.reset();
 
@@ -282,16 +285,29 @@ namespace dxvk {
       if (sparseBind) {
         // Sparse binding needs to serialize command execution, so wait
         // for any prior submissions, then block any subsequent ones
-        sparseBind->waitSemaphore(semaphores.graphics, timelines.graphics);
-        sparseBind->waitSemaphore(semaphores.transfer, timelines.transfer);
+        if (use_timeline) {
+          sparseBind->waitSemaphore(semaphores.graphics, timelines.graphics);
+          sparseBind->waitSemaphore(semaphores.transfer, timelines.transfer);
+  
+          sparseBind->signalSemaphore(semaphores.graphics, ++timelines.graphics);
+          
+          if ((status = sparseBind->submit(m_device, sparse.queueHandle)))
+            return status;
 
-        sparseBind->signalSemaphore(semaphores.graphics, ++timelines.graphics);
+          m_commandSubmission.waitSemaphore(semaphores.graphics,
+            timelines.graphics, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        } else {
+          m_commandSubmission.signalSemaphore(semaphores.bind, 0, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+          if ((status = m_commandSubmission.submit(m_device, graphics.queueHandle, trackedId))) 
+            return status;
+          sparseBind->waitSemaphore(semaphores.bind, 0);
+          sparseBind->signalSemaphore(semaphores.post, 0);
 
-        if ((status = sparseBind->submit(m_device, sparse.queueHandle)))
-          return status;
-
-        m_commandSubmission.waitSemaphore(semaphores.graphics,
-          timelines.graphics, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+          if ((status = sparseBind->submit(m_device, sparse.queueHandle)))
+            return status;
+          
+          m_commandSubmission.waitSemaphore(semaphores.post, 0, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        }
       }
 
       // Execute transfer command buffer, if any
@@ -303,14 +319,23 @@ namespace dxvk {
       // If we had either a transfer command or a semaphore wait, submit to the
       // transfer queue so that all subsequent commands get stalled as necessary.
       if (m_device->hasDedicatedTransferQueue() && !m_commandSubmission.isEmpty()) {
-        m_commandSubmission.signalSemaphore(semaphores.transfer,
-          ++timelines.transfer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
-
-        if ((status = m_commandSubmission.submit(m_device, transfer.queueHandle, trackedId)))
-          return status;
-
-        m_commandSubmission.waitSemaphore(semaphores.transfer,
-          timelines.transfer, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        if (use_timeline) {
+          m_commandSubmission.signalSemaphore(semaphores.transfer,
+            ++timelines.transfer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+  
+          if ((status = m_commandSubmission.submit(m_device, transfer.queueHandle, trackedId)))
+            return status;
+  
+          m_commandSubmission.waitSemaphore(semaphores.transfer,
+            timelines.transfer, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        } else {
+          m_commandSubmission.signalSemaphore(semaphores.sdma, 0, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+          
+          if ((status = m_commandSubmission.submit(m_device, transfer.queueHandle, trackedId)))
+            return status;
+          
+          m_commandSubmission.waitSemaphore(semaphores.sdma, 0, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
+        }
       }
 
       // We promise to never do weird stuff to WSI images on
@@ -344,17 +369,19 @@ namespace dxvk {
         }
       }
 
-      m_commandSubmission.signalSemaphore(semaphores.graphics,
-        ++timelines.graphics, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+      if (use_timeline) {
+        m_commandSubmission.signalSemaphore(semaphores.graphics,
+          ++timelines.graphics, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+      }
 
       // Finally, submit all graphics commands of the current submission
-      if ((status = m_commandSubmission.submit(m_device, graphics.queueHandle, trackedId)))
+      if ((status = m_commandSubmission.submit(m_device, graphics.queueHandle, trackedId, semaphores.fence)))
         return status;
 
       // If there are WSI semaphores involved, do another submit only
       // containing a timeline semaphore signal so that we can be sure
       // that they are safe to use afterwards.
-      if ((m_wsiSemaphores.present || m_wsiSemaphores.acquire) && isLast) {
+      if ((m_wsiSemaphores.present || m_wsiSemaphores.acquire) && isLast && use_timeline) {
         m_commandSubmission.signalSemaphore(semaphores.graphics,
           ++timelines.graphics, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
 
@@ -364,7 +391,7 @@ namespace dxvk {
 
       // Finally, submit semaphore wait on the transfer queue. If this
       // is not the final iteration, fold the wait into the next one.
-      if (cmd.syncSdma) {
+      if (cmd.syncSdma && use_timeline) {
         m_commandSubmission.waitSemaphore(semaphores.graphics,
           timelines.graphics, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT);
 

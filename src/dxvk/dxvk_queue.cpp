@@ -9,6 +9,9 @@ namespace dxvk {
     m_finishThread([this] () { finishCmdLists(); }) {
     auto vk = m_device->vkd();
 
+    m_useTimeline = env::getEnvVar("DXVK_DISABLE_TIMELINE_SEMAPHORES") != "1";
+    Logger::info(str::format("Timeline semaphores: ", m_useTimeline ? "enabled" : "disabled"));
+
     VkSemaphoreTypeCreateInfo semaphoreType = { VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
     semaphoreType.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
 
@@ -40,7 +43,32 @@ namespace dxvk {
     vk->vkDestroySemaphore(vk->device(), m_semaphores.graphics, nullptr);
     vk->vkDestroySemaphore(vk->device(), m_semaphores.transfer, nullptr);
   }
+
+  DxvkTimelineSemaphores DxvkSubmissionQueue::allocateBinarySync() {
+    std::unique_lock<dxvk::mutex> lock(m_binaryPoolMutex);
+    if (!m_binarySyncPool.empty()) {
+      auto sync = m_binarySyncPool.back();
+      m_binarySyncPool.pop_back();
+      return sync;
+    }
+    
+    auto vk = m_device->vkd();
+    DxvkTimelineSemaphores sync;
+    VkSemaphoreCreateInfo semInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+
+    sync.use_timeline = false;
+    vk->vkCreateSemaphore(vk->device(), &semInfo, nullptr, &sync.bind);
+    vk->vkCreateSemaphore(vk->device(), &semInfo, nullptr, &sync.post);
+    vk->vkCreateSemaphore(vk->device(), &semInfo, nullptr, &sync.sdma);
+    vk->vkCreateFence(vk->device(), &fenceInfo, nullptr, &sync.fence);
+    return sync;
+  }
   
+  void DxvkSubmissionQueue::recycleBinarySync(const DxvkTimelineSemaphores& sync) {
+    std::unique_lock<dxvk::mutex> lock(m_binaryPoolMutex);
+    m_binarySyncPool.push_back(sync);
+  }
   
   void DxvkSubmissionQueue::submit(
           DxvkSubmitInfo            submitInfo,
@@ -162,9 +190,14 @@ namespace dxvk {
               trackedSubmitId = entry.latency.frameId;
           }
 
-          entry.result = entry.submit.cmdList->submit(
-            m_semaphores, m_timelines, trackedSubmitId);
-          entry.timelines = m_timelines;
+
+          if (m_useTimeline) {
+            entry.result = entry.submit.cmdList->submit(m_semaphores, m_timelines, trackedSubmitId);
+            entry.timelines = m_timelines;
+          } else {
+            entry.binarySync = allocateBinarySync();
+            entry.result = entry.submit.cmdList->submit(entry.binarySync, m_timelines, trackedSubmitId);
+          }
         } else if (entry.present.presenter != nullptr) {
           if (entry.latency.tracker)
             entry.latency.tracker->notifyQueuePresentBegin(entry.latency.frameId);
@@ -248,18 +281,24 @@ namespace dxvk {
         VkResult status = m_lastError.load();
 
         if (status != VK_ERROR_DEVICE_LOST) {
-          std::array<VkSemaphore, 2> semaphores = { m_semaphores.graphics, m_semaphores.transfer };
-          std::array<uint64_t, 2> timelines = { entry.timelines.graphics, entry.timelines.transfer };
-
           if (entry.latency.tracker)
             entry.latency.tracker->notifyGpuExecutionBegin(entry.latency.frameId);
-
-          VkSemaphoreWaitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
-          waitInfo.semaphoreCount = semaphores.size();
-          waitInfo.pSemaphores = semaphores.data();
-          waitInfo.pValues = timelines.data();
-
-          status = vk->vkWaitSemaphores(vk->device(), &waitInfo, ~0ull);
+          
+          if (m_useTimeline) {
+            std::array<VkSemaphore, 2> semaphores = { m_semaphores.graphics, m_semaphores.transfer };
+            std::array<uint64_t, 2> timelines = { entry.timelines.graphics, entry.timelines.transfer };
+  
+            VkSemaphoreWaitInfo waitInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+            waitInfo.semaphoreCount = semaphores.size();
+            waitInfo.pSemaphores = semaphores.data();
+            waitInfo.pValues = timelines.data();
+  
+            status = vk->vkWaitSemaphores(vk->device(), &waitInfo, ~0ull);
+          } else {
+            status = vk->vkWaitForFences(vk->device(), 1, &entry.binarySync.fence, VK_TRUE, ~0ull);
+            vk->vkResetFences(vk->device(), 1, &entry.binarySync.fence);
+            recycleBinarySync(entry.binarySync);
+          }
 
           if (entry.latency.tracker && status == VK_SUCCESS)
             entry.latency.tracker->notifyGpuExecutionEnd(entry.latency.frameId);
