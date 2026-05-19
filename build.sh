@@ -1,9 +1,14 @@
+# meson setup --cross-file build-win64.txt --buildtype release --prefix $PWD/build_dxvk/system32 build.64
+# meson setup --cross-file build-win32.txt --buildtype release --prefix $PWD/build_dxvk/syswow64 build.32
+
+mkdir -p build_dxvk
+
 cd build.64
-ninja install
+ninja -j 8 install
 cd -
 
 cd build.32
-ninja install
+ninja -j 8 install
 cd -
 
 # Invariant here is that build_dxvk has system32/bin and syswow64/bin
