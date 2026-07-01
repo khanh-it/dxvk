@@ -12,14 +12,13 @@ jobs:
       uses: actions/checkout@v2
       with:
         submodules: recursive
-        fetch-depth: 0
 
     - name: Setup problem matcher
       uses: Joshua-Ashton/gcc-problem-matcher@v1
 
     - name: Build release
       id: build-release
-      uses: Joshua-Ashton/arch-mingw-github-action@v8
+      uses: Joshua-Ashton/arch-mingw-github-action@v5
       with:
         command: |
           export VERSION_NAME="${GITHUB_REF##*/}-${GITHUB_SHA##*/}"
