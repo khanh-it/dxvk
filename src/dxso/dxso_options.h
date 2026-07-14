@@ -50,6 +50,12 @@ namespace dxvk {
     /// This solves some rendering bugs in games that have z-pass shaders which
     /// don't match entirely to the regular vertex shader in this way.
     bool longMad;
+
+    /// Whether vertex shaders may emit ClipDistance builtins.
+    bool enableClipDistance = false;
+
+    /// Whether vertex shaders may emit CullDistance builtins.
+    bool enableCullDistance = false;
   };
 
 }

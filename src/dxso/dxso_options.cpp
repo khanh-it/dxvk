@@ -47,6 +47,10 @@ namespace dxvk {
     vertexConstantBufferAsSSBO = pDevice->GetVertexConstantLayout().totalSize() > devInfo.core.properties.limits.maxUniformBufferRange;
 
     longMad = options.longMad;
+
+    enableClipDistance  = devFeatures.core.features.shaderClipDistance;
+
+    enableCullDistance  = devFeatures.core.features.shaderCullDistance;
   }
 
 }
