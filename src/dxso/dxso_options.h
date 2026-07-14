@@ -57,6 +57,12 @@ namespace dxvk {
 
     /// Whether or not we can rely on robustness2 to handle oob constant access
     bool robustness2Supported;
+
+    /// Whether vertex shaders may emit ClipDistance builtins.
+    bool enableClipDistance = false;
+
+    /// Whether vertex shaders may emit CullDistance builtins.
+    bool enableCullDistance = false;
   };
 
 }

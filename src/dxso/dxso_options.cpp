@@ -45,6 +45,9 @@ namespace dxvk {
     alphaTestWiggleRoom = options.alphaTestWiggleRoom;
 
     robustness2Supported = devFeatures.extRobustness2.robustBufferAccess2;
+
+    enableClipDistance  = devFeatures.core.features.shaderClipDistance;
+    enableCullDistance  = devFeatures.core.features.shaderCullDistance;
   }
 
 }
