@@ -17,6 +17,10 @@ namespace dxvk {
 
     useDepthClipWorkaround
       = !devFeatures.extDepthClipEnable.depthClipEnable;
+    enableClipDistance
+      = devFeatures.core.features.shaderClipDistance;
+    enableCullDistance
+      = devFeatures.core.features.shaderCullDistance;
 
     VkFormatFeatureFlags2 r32Features
       = device->getFormatFeatures(VK_FORMAT_R32_SFLOAT).optimal
