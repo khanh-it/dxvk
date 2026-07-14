@@ -451,7 +451,8 @@ namespace dxvk {
 
 
   void DxsoCompiler::emitVsInit() {
-    m_module.enableCapability(spv::CapabilityClipDistance);
+    if (m_moduleInfo.options.enableClipDistance)
+      m_module.enableCapability(spv::CapabilityClipDistance);
 
     // Only VS needs this, because PS has
     // non-indexable specialized output regs
@@ -3531,9 +3532,6 @@ void DxsoCompiler::emitControlFlowGenericLoop(
 
     m_module.decorateBuiltIn(clipDistArray, spv::BuiltInClipDistance);
 
-    if (m_moduleInfo.options.invariantPosition)
-      m_module.decorate(m_vs.oPos.id, spv::DecorationInvariant);
-    
     const uint32_t positionPtr = m_vs.oPos.id;
 
     // We generated a bad shader, let's not make it even worse.
@@ -3666,7 +3664,11 @@ void DxsoCompiler::emitControlFlowGenericLoop(
       m_vs.functionId, 0, nullptr);
     this->emitLinkerOutputSetup();
 
-    this->emitVsClipping();
+    if (m_moduleInfo.options.invariantPosition && m_vs.oPos.id != 0)
+      m_module.decorate(m_vs.oPos.id, spv::DecorationInvariant);
+
+    if (m_moduleInfo.options.enableClipDistance)
+      this->emitVsClipping();
 
     this->emitFunctionEnd();
   }

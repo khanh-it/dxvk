@@ -31,6 +31,9 @@ namespace dxvk {
 
     sincosEmulation     = options.sincosEmulation;
     drefScaling         = options.drefScaling;
+
+    enableClipDistance  = devFeatures.core.features.shaderClipDistance;
+    enableCullDistance  = devFeatures.core.features.shaderCullDistance;
   }
 
 }

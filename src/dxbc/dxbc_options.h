@@ -63,6 +63,14 @@ namespace dxvk {
     /// Whether to enable sincos emulation
     bool sincosEmulation = false;
 
+    /// Enable clip-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableClipDistance = false;
+
+    /// Enable cull-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableCullDistance = false;
+
     /// Float control flags
     DxbcFloatControlFlags floatControl;
 

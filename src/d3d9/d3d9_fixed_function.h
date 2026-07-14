@@ -13,6 +13,7 @@
 namespace dxvk {
 
   class D3D9DeviceEx;
+  class DxvkDevice;
   class SpirvModule;
 
   struct D3D9Options;
@@ -45,11 +46,12 @@ namespace dxvk {
   };
 
   struct D3D9FixedFunctionOptions {
-    D3D9FixedFunctionOptions(const D3D9Options* options);
+    D3D9FixedFunctionOptions(const Rc<DxvkDevice>& device, const D3D9Options* options);
 
     bool    invariantPosition;
     bool    forceSampleRateShading;
     int32_t drefScaling;
+    bool    enableClipDistance;
   };
 
   constexpr float GetDrefScaleFactor(int32_t bitDepth) {
