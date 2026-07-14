@@ -13,8 +13,10 @@
 
 namespace dxvk {
 
-  D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const D3D9Options* options) {
+  D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const Rc<DxvkDevice>& device, const D3D9Options* options) {
     invariantPosition = options->invariantPosition;
+    enableClipDistance = device->features().core.features.shaderClipDistance;
+    enableCullDistance = device->features().core.features.shaderCullDistance;
   }
 
   uint32_t DoFixedFunctionFog(SpirvModule& spvModule, const D3D9FogContext& fogCtx) {
@@ -1163,7 +1165,7 @@ namespace dxvk {
     uint32_t pointSize = m_module.opFClamp(m_floatType, pointInfo.defaultValue, pointInfo.min, pointInfo.max);
     m_module.opStore(m_vs.out.POINTSIZE, pointSize);
 
-    if (m_vsKey.Data.Contents.VertexClipping)
+    if (m_vsKey.Data.Contents.VertexClipping && m_options.enableClipDistance)
       emitVsClipping(vtx);
   }
 
@@ -1419,7 +1421,8 @@ namespace dxvk {
     setupRenderStateInfo();
 
     // VS Caps
-    m_module.enableCapability(spv::CapabilityClipDistance);
+    if (m_options.enableClipDistance)
+      m_module.enableCapability(spv::CapabilityClipDistance);
 
     emitLightTypeDecl();
     emitBaseBufferDecl();
@@ -2300,7 +2303,7 @@ namespace dxvk {
     D3D9FFShaderCompiler compiler(
       pDevice->GetDXVKDevice(),
       Key, name,
-      pDevice->GetOptions());
+      D3D9FixedFunctionOptions(pDevice->GetDXVKDevice(), pDevice->GetOptions()));
 
     m_shader = compiler.compile();
     m_isgn   = compiler.isgn();
@@ -2323,7 +2326,7 @@ namespace dxvk {
     D3D9FFShaderCompiler compiler(
       pDevice->GetDXVKDevice(),
       Key, name,
-      pDevice->GetOptions());
+      D3D9FixedFunctionOptions(pDevice->GetDXVKDevice(), pDevice->GetOptions()));
 
     m_shader = compiler.compile();
     m_isgn   = compiler.isgn();

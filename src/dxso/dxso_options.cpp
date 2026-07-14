@@ -45,6 +45,10 @@ namespace dxvk {
     forceSamplerTypeSpecConstants = options.forceSamplerTypeSpecConstants;
 
     vertexConstantBufferAsSSBO = pDevice->GetVertexConstantLayout().totalSize() > devInfo.core.properties.limits.maxUniformBufferRange;
+
+    enableClipDistance  = devFeatures.core.features.shaderClipDistance;
+
+    enableCullDistance  = devFeatures.core.features.shaderCullDistance;
   }
 
 }
