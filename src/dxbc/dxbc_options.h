@@ -49,6 +49,14 @@ namespace dxvk {
     // Enable per-sample interlock if supported
     bool enableSampleShadingInterlock = false;
 
+    /// Enable clip-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableClipDistance = false;
+
+    /// Enable cull-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableCullDistance = false;
+
     /// Float control flags
     DxbcFloatControlFlags floatControl;
 
