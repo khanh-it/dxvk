@@ -43,6 +43,8 @@ namespace dxvk {
     longMad = options.longMad;
 
     alphaTestWiggleRoom = options.alphaTestWiggleRoom;
+
+    enableClipDistance  = devFeatures.core.features.shaderClipDistance;
   }
 
 }
