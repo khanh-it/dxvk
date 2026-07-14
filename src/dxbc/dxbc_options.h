@@ -35,6 +35,14 @@ namespace dxvk {
     /// Enables NaN fixup for render target outputs
     bool enableRtOutputNanFixup = false;
 
+    /// Enable clip-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableClipDistance = false;
+
+    /// Enable cull-distance builtins only if the Vulkan device
+    /// actually enabled the corresponding feature.
+    bool enableCullDistance = false;
+
     /// Implement dynamically indexed uniform buffers
     /// with storage buffers for tight bounds checking
     bool dynamicIndexedConstantBufferAsSsbo = false;
